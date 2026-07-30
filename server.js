@@ -92,6 +92,11 @@ app.post('/api/login', loginLimiter, (req, res) => {
 // ==========================================
 // 📝 API สำหรับ Register (สมัครสมาชิก)
 // ==========================================
+// ==========================================
+// 📝 API สำหรับ Register (เจน UID เป็น U001, U002, U003...)
+// ==========================================
+// 📝 API สำหรับ Register (เจน UID อัตโนมัติเป็น U001, U002, U003...)
+// ==========================================
 app.post('/api/register', async (req, res) => {
   const { email, username, password, firstname, lastname } = req.body;
 
@@ -100,10 +105,10 @@ app.post('/api/register', async (req, res) => {
     return res.status(400).json({ message: 'กรุณากรอกข้อมูลให้ครบทุกช่อง' });
   }
 
-  // 2. ตรวจสอบรูปแบบอีเมลเบื้องต้น ต้องมี "@" และมีข้อความก่อน-หลัง @
+  // 2. ตรวจสอบรูปแบบอีเมล
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    return res.status(400).json({ message: 'กรุณากรอกอีเมลให้ถูกต้อง (ต้องมี @ และรูปแบบที่ถูกต้อง)' });
+    return res.status(400).json({ message: 'กรุณากรอกอีเมลให้ถูกต้อง' });
   }
 
   if (password.length < 6) {
@@ -123,31 +128,59 @@ app.post('/api/register', async (req, res) => {
         return res.status(409).json({ message: 'มีชื่อผู้ใช้หรืออีเมลนี้ในระบบแล้ว' });
       }
 
-      // 4. เข้ารหัสผ่านก่อนบันทึก
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const uid = `U${Date.now()}`;
-      const defaultRole = 'R002'; // สมัครใหม่เป็น Student โดยค่าเริ่มต้น
-
-      const sqlInsert = `
-        INSERT INTO customer (UID, FirstName, LastName, Username, Password, RoleID, Email)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+      // 4. 🔍 ค้นหาเฉพาะ UID ที่ขึ้นต้นด้วย U ตามด้วยตัวเลข 3 หลักเท่านั้น (เช่น U001 - U999)
+      const sqlGetMaxUid = `
+        SELECT UID 
+        FROM customer 
+        WHERE UID REGEXP '^U[0-9]{3}$' 
+        ORDER BY UID DESC 
+        LIMIT 1
       `;
-      db.query(sqlInsert, [uid, firstname, lastname, username, hashedPassword, defaultRole, email], (insertErr) => {
-        if (insertErr) {
-          console.error('Register insert error:', insertErr);
-          return res.status(500).json({ message: 'สมัครสมาชิกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง' });
+
+      db.query(sqlGetMaxUid, async (maxErr, maxResult) => {
+        if (maxErr) {
+          console.error('Fetch max UID error:', maxErr);
+          return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการสร้าง UID' });
         }
 
-        return res.json({
-          message: 'สมัครสมาชิกสำเร็จ',
-          user: {
-            uid,
-            firstName: firstname,
-            lastName: lastname,
-            username,
-            roleId: defaultRole,
-            email
+        let nextNum = 1;
+
+        if (maxResult.length > 0) {
+          // ดึงตัวเลข 3 หลักหลังตัว U เช่น "U004" -> 4
+          const lastUid = maxResult[0].UID;
+          const currentNum = parseInt(lastUid.substring(1), 10);
+          nextNum = currentNum + 1; // +1 ไปเรื่อยๆ
+        }
+
+        // จัดรูปแบบให้เป็น U ตามด้วยตัวเลข 3 หลัก (เช่น 5 -> "U005")
+        const newUid = `U${String(nextNum).padStart(3, '0')}`;
+
+        // 5. เข้ารหัสผ่าน และบันทึกข้อมูลลงฐานข้อมูล
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const defaultRole = 'R002'; // สมัครใหม่เป็น Student
+
+        const sqlInsert = `
+          INSERT INTO customer (UID, FirstName, LastName, Username, Password, RoleID, Email)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        db.query(sqlInsert, [newUid, firstname, lastname, username, hashedPassword, defaultRole, email], (insertErr) => {
+          if (insertErr) {
+            console.error('Register insert error:', insertErr);
+            return res.status(500).json({ message: 'สมัครสมาชิกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง' });
           }
+
+          return res.json({
+            message: 'สมัครสมาชิกสำเร็จ',
+            user: {
+              uid: newUid,
+              firstName: firstname,
+              lastName: lastname,
+              username,
+              roleId: defaultRole,
+              email
+            }
+          });
         });
       });
     });
