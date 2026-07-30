@@ -90,6 +90,74 @@ app.post('/api/login', loginLimiter, (req, res) => {
 });
 
 // ==========================================
+// 📝 API สำหรับ Register (สมัครสมาชิก)
+// ==========================================
+app.post('/api/register', async (req, res) => {
+  const { email, username, password, firstname, lastname } = req.body;
+
+  // 1. ตรวจสอบว่ากรอกครบทุกช่อง
+  if (!email || !username || !password || !firstname || !lastname) {
+    return res.status(400).json({ message: 'กรุณากรอกข้อมูลให้ครบทุกช่อง' });
+  }
+
+  // 2. ตรวจสอบรูปแบบอีเมลเบื้องต้น ต้องมี "@" และมีข้อความก่อน-หลัง @
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ message: 'กรุณากรอกอีเมลให้ถูกต้อง (ต้องมี @ และรูปแบบที่ถูกต้อง)' });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ message: 'รหัสผ่านต้องมีความยาวอย่างน้อย 6 ตัวอักษร' });
+  }
+
+  try {
+    // 3. ตรวจสอบว่า Username หรือ Email นี้ถูกใช้ไปแล้วหรือยัง
+    const sqlCheck = 'SELECT UID FROM customer WHERE LOWER(Username) = LOWER(?) OR LOWER(Email) = LOWER(?)';
+    db.query(sqlCheck, [username, email], async (err, existing) => {
+      if (err) {
+        console.error('Register check DB error:', err);
+        return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ กรุณาลองใหม่อีกครั้ง' });
+      }
+
+      if (existing.length > 0) {
+        return res.status(409).json({ message: 'มีชื่อผู้ใช้หรืออีเมลนี้ในระบบแล้ว' });
+      }
+
+      // 4. เข้ารหัสผ่านก่อนบันทึก
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const uid = `U${Date.now()}`;
+      const defaultRole = 'R002'; // สมัครใหม่เป็น Student โดยค่าเริ่มต้น
+
+      const sqlInsert = `
+        INSERT INTO customer (UID, FirstName, LastName, Username, Password, RoleID, Email)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `;
+      db.query(sqlInsert, [uid, firstname, lastname, username, hashedPassword, defaultRole, email], (insertErr) => {
+        if (insertErr) {
+          console.error('Register insert error:', insertErr);
+          return res.status(500).json({ message: 'สมัครสมาชิกไม่สำเร็จ กรุณาลองใหม่อีกครั้ง' });
+        }
+
+        return res.json({
+          message: 'สมัครสมาชิกสำเร็จ',
+          user: {
+            uid,
+            firstName: firstname,
+            lastName: lastname,
+            username,
+            roleId: defaultRole,
+            email
+          }
+        });
+      });
+    });
+  } catch (e) {
+    console.error('Register error:', e);
+    return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ กรุณาลองใหม่อีกครั้ง' });
+  }
+});
+
+// ==========================================
 // 📁 ตั้งค่า multer สำหรับเก็บไฟล์วิดีโอ
 // ==========================================
 const uploadDir = path.join(__dirname, 'uploads', 'videos');
@@ -243,6 +311,70 @@ app.get('/api/users', (req, res) => {
 });
 
 // ==========================================
+// 🛡️ [UPDATE] API แต่งตั้ง / ถอดถอน Admin
+// ต้องยืนยันรหัสผ่านของผู้ทำรายการ (requester) ก่อนทุกครั้ง
+// ==========================================
+app.patch('/api/users/:id/role', async (req, res) => {
+  const { id } = req.params; // UID ของผู้ใช้เป้าหมายที่จะเปลี่ยน Role
+  const { requesterUid, password, newRole } = req.body;
+
+  if (!requesterUid || !password || !newRole) {
+    return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน กรุณาระบุผู้ทำรายการและรหัสผ่าน' });
+  }
+
+  if (!['R001', 'R002'].includes(newRole)) {
+    return res.status(400).json({ message: 'ค่า Role ไม่ถูกต้อง' });
+  }
+
+  // 1. ดึงข้อมูลผู้ทำรายการ (requester) เพื่อตรวจสอบรหัสผ่านและสิทธิ์
+  const sqlRequester = 'SELECT * FROM customer WHERE UID = ?';
+  db.query(sqlRequester, [requesterUid], async (err, requesterResults) => {
+    if (err) {
+      console.error('Fetch requester error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' });
+    }
+
+    if (requesterResults.length === 0) {
+      return res.status(401).json({ message: 'ไม่พบผู้ทำรายการในระบบ' });
+    }
+
+    const requester = requesterResults[0];
+
+    // 2. ต้องเป็น Admin เท่านั้นถึงจะทำรายการนี้ได้
+    if (requester.RoleID !== 'R001') {
+      return res.status(403).json({ message: 'คุณไม่มีสิทธิ์ทำรายการนี้' });
+    }
+
+    // 3. ตรวจสอบรหัสผ่านของผู้ทำรายการ
+    let isMatch = false;
+    try {
+      isMatch = await bcrypt.compare(password, requester.Password);
+    } catch (e) {
+      console.error('bcrypt compare error:', e);
+    }
+
+    if (!isMatch) {
+      return res.status(401).json({ message: 'รหัสผ่านไม่ถูกต้อง' });
+    }
+
+    // 4. อัปเดต RoleID ของผู้ใช้เป้าหมาย
+    const sqlUpdate = 'UPDATE customer SET RoleID = ? WHERE UID = ?';
+    db.query(sqlUpdate, [newRole, id], (updErr, result) => {
+      if (updErr) {
+        console.error('Update role error:', updErr);
+        return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการอัปเดตสิทธิ์ผู้ใช้' });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ message: 'ไม่พบผู้ใช้ที่ต้องการเปลี่ยนสิทธิ์' });
+      }
+
+      res.json({ message: 'เปลี่ยนสิทธิ์ผู้ใช้สำเร็จ', uid: id, newRole });
+    });
+  });
+});
+
+// ==========================================
 // ✏️ [UPDATE] API แก้ไขข้อมูลวิดีโอ และ Summary
 // ==========================================
 app.put('/api/videos/:id', (req, res) => {
@@ -317,4 +449,3 @@ const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
-//=====
