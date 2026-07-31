@@ -6,6 +6,8 @@ const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const { transcribeVideo } = require('./transcribe');
+const { summarize } = require('./lexrank');
 
 const app = express();
 app.use(cors());
@@ -18,9 +20,9 @@ app.use('/uploads', express.static('uploads'));
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
-  password: '1234',
+  password: '1111',
   database: 'video_summary_g15',
-  port: 3307
+  port: 3306
 });
 
 db.connect((err) => {
@@ -92,11 +94,7 @@ app.post('/api/login', loginLimiter, (req, res) => {
 // ==========================================
 // 📝 API สำหรับ Register (สมัครสมาชิก)
 // ==========================================
-// ==========================================
-// 📝 API สำหรับ Register (เจน UID เป็น U001, U002, U003...)
-// ==========================================
-// 📝 API สำหรับ Register (เจน UID อัตโนมัติเป็น U001, U002, U003...)
-// ==========================================
+
 app.post('/api/register', async (req, res) => {
   const { email, username, password, firstname, lastname } = req.body;
 
@@ -325,6 +323,63 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
 });
 
 // ==========================================
+// 🧠 [PROCESS] API สรุปวิดีโอด้วย Speech-to-Text + LexRank
+// ขั้นตอน: หา path วิดีโอ -> แยกเสียง -> ถอดเป็นข้อความ -> สรุปด้วย LexRank -> บันทึกลง DB
+// ==========================================
+app.post('/api/videos/:id/summarize', async (req, res) => {
+  const { id } = req.params;
+  const { numSentences } = req.body; // จำนวนประโยคสรุปที่ต้องการ (ไม่ระบุ = ใช้ค่า default 5)
+
+  // 1. หา path ไฟล์วิดีโอจาก DB
+  const sqlSelect = 'SELECT VideoPath FROM Video WHERE VideoID = ?';
+  db.query(sqlSelect, [id], async (err, results) => {
+    if (err || results.length === 0) {
+      return res.status(404).json({ message: 'ไม่พบวิดีโอที่ต้องการสรุป' });
+    }
+
+    const videoPath = path.join(__dirname, results[0].VideoPath);
+
+    try {
+      // 2. แยกเสียง + ถอดเป็นข้อความ (Whisper API)
+      console.log(`🎙️ กำลังถอดเสียงวิดีโอ ${id} ...`);
+      const transcript = await transcribeVideo(videoPath);
+
+      if (!transcript || transcript.trim().length === 0) {
+        return res.status(422).json({ message: 'ไม่สามารถถอดเสียงจากวิดีโอนี้ได้ (ไม่พบคำพูด)' });
+      }
+
+      // 3. สรุปด้วย LexRank
+      console.log(`📝 กำลังสรุปข้อความด้วย LexRank ...`);
+      const summaryText = summarize(transcript, numSentences || 5);
+
+      // 4. บันทึกลงตาราง Summary (สร้างใหม่ถ้ายังไม่มี, อัปเดตถ้ามีอยู่แล้ว)
+      const summaryId = `S${Date.now()}`;
+      const sqlUpsert = `
+        INSERT INTO Summary (SummaryID, VideoID, Transcript, SummaryText)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE Transcript = VALUES(Transcript), SummaryText = VALUES(SummaryText)
+      `;
+      db.query(sqlUpsert, [summaryId, id, transcript, summaryText], (dbErr) => {
+        if (dbErr) {
+          console.error('Save summary error:', dbErr);
+          return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึกลงฐานข้อมูลไม่สำเร็จ' });
+        }
+
+        res.json({
+          message: 'สรุปวิดีโอสำเร็จ',
+          videoId: id,
+          transcript,
+          summary: summaryText
+        });
+      });
+    } catch (procErr) {
+      console.error('Summarize process error:', procErr);
+      res.status(500).json({ message: procErr.message || 'เกิดข้อผิดพลาดระหว่างประมวลผลวิดีโอ' });
+    }
+  });
+});
+
+// ==========================================
 // 👥 API สำหรับดึงรายชื่อผู้ใช้งานทั้งหมด (User Management)
 // ==========================================
 app.get('/api/users', (req, res) => {
@@ -482,4 +537,4 @@ const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
-//
+
