@@ -24,9 +24,9 @@ app.use('/api/summaries', require('./summary'));
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
-  password: '1111',
+  password: '1234',
   database: 'video_summary_g15',
-  port: 3306
+  port: 3307
 });
 
 db.connect((err) => {
@@ -193,6 +193,89 @@ app.post('/api/register', async (req, res) => {
 });
 
 // ==========================================
+// 🔑 API สำหรับ Forgot Password (แบบง่าย - ไม่ส่งอีเมลจริง)
+// แค่เช็คว่ามีอีเมลนี้อยู่ในระบบหรือไม่ เหมาะสำหรับทดสอบ/โปรเจกต์นักศึกษา
+// ==========================================
+app.post('/api/forgot-password', (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ message: 'กรุณากรอกอีเมล' });
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ message: 'กรุณากรอกอีเมลให้ถูกต้อง' });
+  }
+
+  const sql = 'SELECT UID, Username FROM customer WHERE LOWER(Email) = LOWER(?)';
+  db.query(sql, [email], (err, results) => {
+    if (err) {
+      console.error('Forgot password DB error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ กรุณาลองใหม่อีกครั้ง' });
+    }
+
+    if (results.length === 0) {
+      console.log(`⚠️ Forgot password: ไม่พบอีเมล ${email} ในระบบ`);
+      // ตอบว่าไม่พบตรง ๆ เพราะฝั่ง frontend ต้องรู้ผลเพื่อตัดสินใจว่าจะโชว์ฟอร์มตั้งรหัสผ่านใหม่หรือไม่
+      // (โปรเจกต์นักศึกษา/ทดสอบ ไม่ได้เน้นความปลอดภัยระดับ production)
+      return res.status(404).json({ message: 'ไม่พบอีเมลนี้ในระบบ' });
+    }
+
+    const user = results[0];
+    console.log(`✅ Forgot password: พบผู้ใช้ ${user.Username} (${user.UID}) สำหรับอีเมล ${email}`);
+
+    return res.json({ message: 'พบอีเมลนี้ในระบบ กรุณาตั้งรหัสผ่านใหม่', exists: true });
+  });
+});
+
+// ==========================================
+// 🔒 API สำหรับตั้งรหัสผ่านใหม่ (ใช้ต่อจาก forgot-password)
+// รับอีเมล + รหัสผ่านใหม่ แล้วอัปเดตลงฐานข้อมูลโดยตรง (ไม่ต้องมีลิงก์/token เพราะเป็นแบบง่าย)
+// ==========================================
+app.post('/api/reset-password', async (req, res) => {
+  const { email, newPassword } = req.body;
+
+  if (!email || !newPassword) {
+    return res.status(400).json({ message: 'กรุณากรอกข้อมูลให้ครบถ้วน' });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({ message: 'รหัสผ่านต้องมีความยาวอย่างน้อย 6 ตัวอักษร' });
+  }
+
+  try {
+    const sqlCheck = 'SELECT UID FROM customer WHERE LOWER(Email) = LOWER(?)';
+    db.query(sqlCheck, [email], async (err, results) => {
+      if (err) {
+        console.error('Reset password check DB error:', err);
+        return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ กรุณาลองใหม่อีกครั้ง' });
+      }
+
+      if (results.length === 0) {
+        return res.status(404).json({ message: 'ไม่พบอีเมลนี้ในระบบ' });
+      }
+
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      const sqlUpdate = 'UPDATE customer SET Password = ? WHERE LOWER(Email) = LOWER(?)';
+
+      db.query(sqlUpdate, [hashedPassword, email], (updErr) => {
+        if (updErr) {
+          console.error('Reset password update error:', updErr);
+          return res.status(500).json({ message: 'เปลี่ยนรหัสผ่านไม่สำเร็จ กรุณาลองใหม่อีกครั้ง' });
+        }
+
+        console.log(`🔑 เปลี่ยนรหัสผ่านสำเร็จสำหรับอีเมล ${email}`);
+        return res.json({ message: 'เปลี่ยนรหัสผ่านสำเร็จ กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่' });
+      });
+    });
+  } catch (e) {
+    console.error('Reset password error:', e);
+    return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ กรุณาลองใหม่อีกครั้ง' });
+  }
+});
+
+// ==========================================
 // 📁 ตั้งค่า multer สำหรับเก็บไฟล์วิดีโอ
 // ==========================================
 const uploadDir = path.join(__dirname, 'uploads', 'videos');
@@ -329,6 +412,9 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
 // ==========================================
 // 🧠 [PROCESS] API สรุปวิดีโอด้วย Speech-to-Text + LexRank
 // ขั้นตอน: หา path วิดีโอ -> แยกเสียง -> ถอดเป็นข้อความ -> สรุปด้วย LexRank -> บันทึกลง DB
+// หมายเหตุ: ตาราง Summary ไม่มีคอลัมน์ Transcript ตรง ๆ (มีแต่ TranscriptID ที่เป็น FK
+// ไปตาราง Transcript และเป็น NOT NULL) จึงต้อง insert Transcript ก่อนเสมอ แล้วค่อยเอา
+// TranscriptID ที่ได้ไปสร้าง/อัปเดต Summary
 // ==========================================
 app.post('/api/videos/:id/summarize', async (req, res) => {
   const { id } = req.params;
@@ -344,7 +430,7 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
     const videoPath = path.join(__dirname, results[0].VideoPath);
 
     try {
-      // 2. แยกเสียง + ถอดเป็นข้อความ (Whisper API)
+      // 2. แยกเสียง + ถอดเป็นข้อความ (Whisper local)
       console.log(`🎙️ กำลังถอดเสียงวิดีโอ ${id} ...`);
       const transcript = await transcribeAudio(videoPath);
 
@@ -356,24 +442,57 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
       console.log(`📝 กำลังสรุปข้อความด้วย LexRank ...`);
       const summaryText = summarize(transcript, numSentences || 5);
 
-      // 4. บันทึกลงตาราง Summary (สร้างใหม่ถ้ายังไม่มี, อัปเดตถ้ามีอยู่แล้ว)
-      const summaryId = `S${Date.now()}`;
-      const sqlUpsert = `
-        INSERT INTO Summary (SummaryID, VideoID, Transcript, SummaryText)
+      // 4. บันทึก Transcript ก่อน (Summary ต้องผูกกับ TranscriptID)
+      const transcriptId = `T${Date.now()}`;
+      const createDate = new Date().toISOString().slice(0, 10);
+
+      const sqlTranscript = `
+        INSERT INTO Transcript (TranscriptID, VideoID, TranscriptText, CreateDate)
         VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE Transcript = VALUES(Transcript), SummaryText = VALUES(SummaryText)
       `;
-      db.query(sqlUpsert, [summaryId, id, transcript, summaryText], (dbErr) => {
-        if (dbErr) {
-          console.error('Save summary error:', dbErr);
-          return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึกลงฐานข้อมูลไม่สำเร็จ' });
+
+      db.query(sqlTranscript, [transcriptId, id, transcript, createDate], (transErr) => {
+        if (transErr) {
+          console.error('Save transcript error:', transErr);
+          return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึก Transcript ไม่สำเร็จ' });
         }
 
-        res.json({
-          message: 'สรุปวิดีโอสำเร็จ',
-          videoId: id,
-          transcript,
-          summary: summaryText
+        // 5. เช็คว่ามี Summary ของวิดีโอนี้อยู่แล้วหรือยัง (สร้างใหม่ หรืออัปเดต)
+        const sqlCheckSummary = 'SELECT SummaryID FROM Summary WHERE VideoID = ?';
+        db.query(sqlCheckSummary, [id], (checkErr, checkResults) => {
+          if (checkErr) {
+            console.error('Check summary error:', checkErr);
+            return res.status(500).json({ message: 'สรุปสำเร็จแต่ตรวจสอบข้อมูลเดิมไม่สำเร็จ' });
+          }
+
+          if (checkResults.length > 0) {
+            // มีอยู่แล้ว -> UPDATE
+            const existingSummaryId = checkResults[0].SummaryID;
+            const sqlUpdate = `
+              UPDATE Summary SET TranscriptID = ?, SummaryText = ? WHERE SummaryID = ?
+            `;
+            db.query(sqlUpdate, [transcriptId, summaryText, existingSummaryId], (updErr) => {
+              if (updErr) {
+                console.error('Update summary error:', updErr);
+                return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึกลงฐานข้อมูลไม่สำเร็จ' });
+              }
+              res.json({ message: 'สรุปวิดีโอสำเร็จ', videoId: id, transcript, summary: summaryText });
+            });
+          } else {
+            // ยังไม่มี -> INSERT ใหม่
+            const summaryId = `S${Date.now()}`;
+            const sqlInsert = `
+              INSERT INTO Summary (SummaryID, VideoID, TranscriptID, SummaryText)
+              VALUES (?, ?, ?, ?)
+            `;
+            db.query(sqlInsert, [summaryId, id, transcriptId, summaryText], (insErr) => {
+              if (insErr) {
+                console.error('Insert summary error:', insErr);
+                return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึกลงฐานข้อมูลไม่สำเร็จ' });
+              }
+              res.json({ message: 'สรุปวิดีโอสำเร็จ', videoId: id, transcript, summary: summaryText });
+            });
+          }
         });
       });
     } catch (procErr) {
@@ -541,7 +660,3 @@ const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
-
-//1111
-////
-////
