@@ -16,6 +16,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/summaries', require('./summary'));
 
 // ==========================================
 // 🔌 เชื่อมต่อฐานข้อมูล MySQL
