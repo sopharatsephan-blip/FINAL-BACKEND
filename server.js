@@ -10,11 +10,12 @@ const fs = require('fs');
 const path = require('path');
 const { transcribeVideo } = require('./transcribe');
 const { summarize } = require('./lexrank');
-
+const dashboardRoutes = require('./dashboard');
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
+app.use('/api/dashboard', dashboardRoutes);
 
 // ==========================================
 // 🔌 เชื่อมต่อฐานข้อมูล MySQL
@@ -22,9 +23,9 @@ app.use('/uploads', express.static('uploads'));
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
-  password: '1111',
+  password: '1234',
   database: 'video_summary_g15',
-  port: 3306
+  port: 3307
 });
 
 db.connect((err) => {
