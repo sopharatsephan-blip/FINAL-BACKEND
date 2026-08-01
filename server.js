@@ -24,9 +24,9 @@ app.use('/api/summaries', require('./summary'));
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
-  password: '1111',
+  password: '1234',
   database: 'video_summary_g15',
-  port: 3306
+  port: 3307
 });
 
 db.connect((err) => {
@@ -217,8 +217,6 @@ app.post('/api/forgot-password', (req, res) => {
 
     if (results.length === 0) {
       console.log(`⚠️ Forgot password: ไม่พบอีเมล ${email} ในระบบ`);
-      // ตอบว่าไม่พบตรง ๆ เพราะฝั่ง frontend ต้องรู้ผลเพื่อตัดสินใจว่าจะโชว์ฟอร์มตั้งรหัสผ่านใหม่หรือไม่
-      // (โปรเจกต์นักศึกษา/ทดสอบ ไม่ได้เน้นความปลอดภัยระดับ production)
       return res.status(404).json({ message: 'ไม่พบอีเมลนี้ในระบบ' });
     }
 
@@ -503,6 +501,110 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
 });
 
 // ==========================================
+// 📄 [READ] API ดึงผลสรุป + Transcript ของวิดีโอ (สำหรับหน้า SummaryResult / SummaryDetail)
+// แก้ไขแล้ว: JOIN ไปตาราง Transcript ผ่าน TranscriptID แทนการอ้างคอลัมน์ 'Transcript'
+// ที่ไม่มีอยู่จริงในตาราง Summary (สาเหตุของ error "Unknown column 'Transcript'")
+// ==========================================
+app.get('/api/videos/:id/summary', (req, res) => {
+  const { id } = req.params;
+
+  const sql = `
+    SELECT 
+      s.SummaryID, s.SummaryText, s.MainTopic, s.Position,
+      t.TranscriptText AS Transcript
+    FROM Video v
+    LEFT JOIN Summary s ON v.VideoID = s.VideoID
+    LEFT JOIN Transcript t ON s.TranscriptID = t.TranscriptID
+    WHERE v.VideoID = ?
+  `;
+
+  db.query(sql, [id], (err, results) => {
+    if (err) {
+      console.error('Fetch video summary DB error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสรุป' });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'ไม่พบวิดีโอนี้ในระบบ' });
+    }
+
+    const row = results[0];
+
+    if (!row.SummaryID) {
+      return res.status(404).json({ message: 'วิดีโอนี้ยังไม่มีข้อมูลสรุป' });
+    }
+
+    res.json({
+      SummaryID: row.SummaryID,
+      SummaryText: row.SummaryText,
+      MainTopic: row.MainTopic,
+      Position: row.Position,
+      Transcript: row.Transcript,
+    });
+  });
+});
+
+// ==========================================
+// 📄 [READ] API ดึงรายละเอียดวิดีโอเดี่ยว (สำหรับหน้า Publish Summary)
+// รวมข้อมูล Video + Company + Summary + Category + SummaryText ในครั้งเดียว
+// ==========================================
+app.get('/api/videos/:id', (req, res) => {
+  const { id } = req.params;
+
+  const sql = `
+    SELECT 
+      v.VideoID, v.VideoTitle, v.UploadDate, v.ViewCount, v.VisibilityType,
+      c.CompanyName,
+      s.SummaryID, s.SummaryText, s.Position,
+      jc.CategoryName
+    FROM Video v
+    LEFT JOIN Company c ON v.CompanyID = c.CompanyID
+    LEFT JOIN Summary s ON v.VideoID = s.VideoID
+    LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
+    WHERE v.VideoID = ?
+  `;
+
+  db.query(sql, [id], (err, results) => {
+    if (err) {
+      console.error('Fetch video detail DB error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลวิดีโอ' });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'ไม่พบวิดีโอนี้ในระบบ' });
+    }
+
+    res.json(results[0]);
+  });
+});
+
+// ==========================================
+// 🌐 [UPDATE] API เผยแพร่วิดีโอ (ตั้งค่า VisibilityType เท่านั้น)
+// ==========================================
+app.patch('/api/videos/:id/publish', (req, res) => {
+  const { id } = req.params;
+  const { visibilityType } = req.body;
+
+  if (!['Public', 'Private'].includes(visibilityType)) {
+    return res.status(400).json({ message: 'ค่า visibilityType ไม่ถูกต้อง (ต้องเป็น Public หรือ Private)' });
+  }
+
+  const sql = 'UPDATE Video SET VisibilityType = ? WHERE VideoID = ?';
+  db.query(sql, [visibilityType, id], (err, result) => {
+    if (err) {
+      console.error('Publish video error:', err);
+      return res.status(500).json({ message: 'เผยแพร่วิดีโอไม่สำเร็จ' });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'ไม่พบวิดีโอนี้ในระบบ' });
+    }
+
+    res.json({ message: 'เผยแพร่วิดีโอสำเร็จ', videoId: id, visibilityType });
+  });
+});
+
+// ==========================================
 // 👥 API สำหรับดึงรายชื่อผู้ใช้งานทั้งหมด (User Management)
 // ==========================================
 app.get('/api/users', (req, res) => {
@@ -656,31 +758,6 @@ app.delete('/api/videos/:id', (req, res) => {
 // ==========================================
 // 🚀 เริ่มรันเซิร์ฟเวอร์ (ย้ายมาไว้ท้ายไฟล์ หลังลงทะเบียน route ทั้งหมดแล้ว)
 // ==========================================
-// ==========================================
-// 📄 [READ] API ดึงข้อมูลสรุปวิดีโอตาม VideoID (สำหรับหน้า Summary Details)
-// ==========================================
-app.get('/api/videos/:id/summary', (req, res) => {
-  const { id } = req.params;
-  const sql = `
-    SELECT SummaryID, VideoID, Transcript, SummaryText, CreateDate, CreateTime
-    FROM Summary
-    WHERE VideoID = ?
-    ORDER BY CreateDate DESC, CreateTime DESC
-    LIMIT 1
-  `;
-  db.query(sql, [id], (err, results) => {
-    if (err) {
-      console.error('Fetch summary error:', err);
-      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสรุป' });
-    }
-    if (results.length === 0) {
-      return res.status(404).json({ message: 'ยังไม่มีข้อมูลสรุปสำหรับวิดีโอนี้' });
-    }
-    res.json(results[0]);
-  });
-});
-
-
 const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
