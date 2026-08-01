@@ -1,18 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const mysql = require('mysql2');
-
-const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: '1234',
-  database: 'video_summary_g15',
-  port: 3307
-});
-
-db.connect((err) => {
-  if (err) console.error('Summary DB error:', err.message);
-});
+const db = require('./db'); // ✅ ใช้ pool กลางจาก db.js แทนการสร้าง connection เอง
 
 // GET /api/summaries/video/:videoId - ดึงข้อมูลสรุปตาม VideoID
 router.get('/video/:videoId', (req, res) => {

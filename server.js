@@ -1,7 +1,6 @@
 require('dotenv').config(); 
 
 const express = require('express');
-const mysql = require('mysql2');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
@@ -19,23 +18,11 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/summaries', require('./summary'));
 
 // ==========================================
-// 🔌 เชื่อมต่อฐานข้อมูล MySQL
+// 🔌 เชื่อมต่อฐานข้อมูล MySQL (ใช้ Connection Pool กลางจาก db.js)
+// ✅ แก้ปัญหา "Can't add new command when connection is in closed state"
+// โดยใช้ pool เดียวกันทุกไฟล์ (server.js, dashboard.js, summary.js)
 // ==========================================
-const db = mysql.createConnection({
-  host: 'localhost',
-  user: 'root',
-  password: '1234',
-  database: 'video_summary_g15',
-  port: 3307
-});
-
-db.connect((err) => {
-  if (err) {
-    console.error('❌ Database connection failed:', err.message);
-  } else {
-    console.log('✅ Connected to MySQL Database (video_summary_g15)');
-  }
-});
+const db = require('./db');
 
 // ==========================================
 // 🚦 Rate limiter สำหรับป้องกัน brute force
@@ -502,8 +489,6 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
 
 // ==========================================
 // 📄 [READ] API ดึงผลสรุป + Transcript ของวิดีโอ (สำหรับหน้า SummaryResult / SummaryDetail)
-// แก้ไขแล้ว: JOIN ไปตาราง Transcript ผ่าน TranscriptID แทนการอ้างคอลัมน์ 'Transcript'
-// ที่ไม่มีอยู่จริงในตาราง Summary (สาเหตุของ error "Unknown column 'Transcript'")
 // ==========================================
 app.get('/api/videos/:id/summary', (req, res) => {
   const { id } = req.params;
@@ -752,6 +737,68 @@ app.delete('/api/videos/:id', (req, res) => {
 
       res.json({ message: 'ลบวิดีโอสำเร็จ' });
     });
+  });
+});
+
+// ==========================================
+// 📄 [READ] API ดึงข้อมูลสรุปสำหรับหน้า Edit Summary (ตาม VideoID)
+// ==========================================
+app.get('/api/summaries/video/:videoId', (req, res) => {
+  const { videoId } = req.params;
+  const sql = `
+    SELECT 
+      s.SummaryID, s.VideoID, s.SummaryText, s.Position, s.CategoryID,
+      v.VideoTitle,
+      c.CompanyName, c.Location,
+      jc.CategoryName
+    FROM Summary s
+    LEFT JOIN Video v ON s.VideoID = v.VideoID
+    LEFT JOIN Company c ON v.CompanyID = c.CompanyID
+    LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
+    WHERE s.VideoID = ?
+    ORDER BY s.CreateDate DESC, s.CreateTime DESC
+    LIMIT 1
+  `;
+  db.query(sql, [videoId], (err, results) => {
+    if (err) {
+      console.error('Fetch summary for edit error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูล' });
+    }
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'ไม่พบข้อมูลสรุปสำหรับวิดีโอนี้' });
+    }
+
+    const row = results[0];
+    // 🔄 แปลงชื่อ field ให้ตรงกับที่ EditSummary.jsx คาดหวัง (camelCase)
+    res.json({
+      summaryId: row.SummaryID,
+      videoId: row.VideoID,
+      jobTitle: row.Position || row.VideoTitle || '',
+      company: row.CompanyName || '',
+      category: row.CategoryName || '',
+      province: row.Location || '',
+      summaryContent: row.SummaryText || ''
+    });
+  });
+});
+
+// ==========================================
+// ✏️ [UPDATE] API บันทึกการแก้ไขสรุป (สำหรับปุ่ม Save ในหน้า Edit Summary)
+// ==========================================
+app.put('/api/summaries/:summaryId', (req, res) => {
+  const { summaryId } = req.params;
+  const { jobTitle, summaryContent } = req.body;
+
+  const sql = `UPDATE Summary SET Position = ?, SummaryText = ? WHERE SummaryID = ?`;
+  db.query(sql, [jobTitle, summaryContent, summaryId], (err, result) => {
+    if (err) {
+      console.error('Update summary error:', err);
+      return res.status(500).json({ message: 'บันทึกไม่สำเร็จ' });
+    }
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'ไม่พบข้อมูลสรุปที่ต้องการแก้ไข' });
+    }
+    res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
   });
 });
 
