@@ -1,9 +1,12 @@
+const { spawn } = require('child_process');
+const path = require('path');
+
 function transcribeAudio(audioPath) {
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(__dirname, 'whisper_local.py');
 
     const pythonProcess = spawn('python', [scriptPath, audioPath], {
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' } // บังคับ encoding utf-8 ทั้งฝั่ง python
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
 
     let output = '';
@@ -29,3 +32,5 @@ function transcribeAudio(audioPath) {
     });
   });
 }
+
+module.exports = { transcribeAudio };

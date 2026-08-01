@@ -8,7 +8,7 @@ const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const { transcribeVideo } = require('./transcribe');
+const { transcribeAudio } = require('./transcribe');
 const { summarize } = require('./lexrank');
 const dashboardRoutes = require('./dashboard');
 const app = express();
@@ -24,9 +24,9 @@ app.use('/api/summaries', require('./summary'));
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
-  password: '1234',
+  password: '1111',
   database: 'video_summary_g15',
-  port: 3307
+  port: 3306
 });
 
 db.connect((err) => {
@@ -346,7 +346,7 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
     try {
       // 2. แยกเสียง + ถอดเป็นข้อความ (Whisper API)
       console.log(`🎙️ กำลังถอดเสียงวิดีโอ ${id} ...`);
-      const transcript = await transcribeVideo(videoPath);
+      const transcript = await transcribeAudio(videoPath);
 
       if (!transcript || transcript.trim().length === 0) {
         return res.status(422).json({ message: 'ไม่สามารถถอดเสียงจากวิดีโอนี้ได้ (ไม่พบคำพูด)' });
