@@ -24,9 +24,9 @@ app.use('/api/summaries', require('./summary'));
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',
-  password: '1234',
+  password: '1111',
   database: 'video_summary_g15',
-  port: 3307
+  port: 3306
 });
 
 db.connect((err) => {
@@ -656,6 +656,31 @@ app.delete('/api/videos/:id', (req, res) => {
 // ==========================================
 // 🚀 เริ่มรันเซิร์ฟเวอร์ (ย้ายมาไว้ท้ายไฟล์ หลังลงทะเบียน route ทั้งหมดแล้ว)
 // ==========================================
+// ==========================================
+// 📄 [READ] API ดึงข้อมูลสรุปวิดีโอตาม VideoID (สำหรับหน้า Summary Details)
+// ==========================================
+app.get('/api/videos/:id/summary', (req, res) => {
+  const { id } = req.params;
+  const sql = `
+    SELECT SummaryID, VideoID, Transcript, SummaryText, CreateDate, CreateTime
+    FROM Summary
+    WHERE VideoID = ?
+    ORDER BY CreateDate DESC, CreateTime DESC
+    LIMIT 1
+  `;
+  db.query(sql, [id], (err, results) => {
+    if (err) {
+      console.error('Fetch summary error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสรุป' });
+    }
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'ยังไม่มีข้อมูลสรุปสำหรับวิดีโอนี้' });
+    }
+    res.json(results[0]);
+  });
+});
+
+
 const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);

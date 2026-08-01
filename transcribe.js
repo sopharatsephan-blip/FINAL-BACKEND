@@ -5,9 +5,9 @@ function transcribeAudio(audioPath) {
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(__dirname, 'whisper_local.py');
 
-    const pythonProcess = spawn('python', [scriptPath, audioPath], {
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-    });
+   const pythonProcess = spawn('python', ['-X', 'utf8', scriptPath, audioPath], {
+  env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+});
 
     let output = '';
     let errorOutput = '';
