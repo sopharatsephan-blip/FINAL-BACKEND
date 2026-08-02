@@ -367,7 +367,7 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
   const videoPath = `uploads/videos/${req.file.filename}`;
   const title = videoTitle || req.file.originalname.replace(/\.[^/.]+$/, '');
   const uploadDate = new Date().toISOString().slice(0, 10);
-  const visibility = visibilityType || 'Public';
+  const visibility = visibilityType || 'Private';
 
   // 1. เพิ่มข้อมูลในตาราง Video
   const sqlVideo = `
