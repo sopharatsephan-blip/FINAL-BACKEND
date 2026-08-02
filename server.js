@@ -531,21 +531,23 @@ app.get('/api/videos/:id/summary', (req, res) => {
 
 // ==========================================
 // 📄 [READ] API ดึงรายละเอียดวิดีโอเดี่ยว (สำหรับหน้า Publish Summary)
-// รวมข้อมูล Video + Company + Summary + Category + SummaryText ในครั้งเดียว
+// รวมข้อมูล Video + Company + Summary + Category + SummaryText + Transcript ในครั้งเดียว
 // ==========================================
 app.get('/api/videos/:id', (req, res) => {
   const { id } = req.params;
 
   const sql = `
     SELECT 
-      v.VideoID, v.VideoTitle, v.UploadDate, v.ViewCount, v.VisibilityType,
+      v.VideoID, v.VideoTitle, v.VideoPath, v.UploadDate, v.ViewCount, v.VisibilityType,
       c.CompanyName,
       s.SummaryID, s.SummaryText, s.Position,
-      jc.CategoryName
+      jc.CategoryName,
+      t.TranscriptText AS Transcript
     FROM Video v
     LEFT JOIN Company c ON v.CompanyID = c.CompanyID
     LEFT JOIN Summary s ON v.VideoID = s.VideoID
     LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
+    LEFT JOIN Transcript t ON s.TranscriptID = t.TranscriptID
     WHERE v.VideoID = ?
   `;
 
