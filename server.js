@@ -300,6 +300,67 @@ app.get('/api/videos', (req, res) => {
 });
 
 // ==========================================
+// 🏆 [READ] API ดึงวิดีโอยอดฮิตอันดับ 1 ของสัปดาห์ (สำหรับ Popular Video Rank บน Dashboard)
+// เรียงตาม ViewCount มากไปน้อย เอาเฉพาะวิดีโอที่เผยแพร่แล้ว (Public)
+// ==========================================
+app.get('/api/videos/top', (req, res) => {
+  const sql = `
+    SELECT 
+      v.VideoID, v.VideoTitle, v.ViewCount, v.UploadDate,
+      c.CompanyName, c.Location, c.WorkType,
+      s.Position, jc.CategoryName,
+      a.Duration
+    FROM Video v
+    LEFT JOIN Company c ON v.CompanyID = c.CompanyID
+    LEFT JOIN Summary s ON v.VideoID = s.VideoID
+    LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
+    LEFT JOIN Audio a ON v.VideoID = a.VideoID
+    WHERE v.VisibilityType = 'Public'
+    ORDER BY v.ViewCount DESC
+    LIMIT 1
+  `;
+  db.query(sql, (err, results) => {
+    if (err) {
+      console.error('Fetch top video error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลวิดีโอยอดฮิต' });
+    }
+    res.json(results[0] || null);
+  });
+});
+
+// ==========================================
+// 🗓️ [READ] API ดึงวิดีโอสรุปประจำสัปดาห์ (สำหรับ Weekly Video Summaries บน Dashboard)
+// เรียงตามวันที่อัปโหลดล่าสุด เอาเฉพาะวิดีโอที่เผยแพร่แล้ว (Public)
+// รับ query param limit ได้ (ค่าเริ่มต้น 3 รายการ)
+// ==========================================
+app.get('/api/videos/weekly', (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 3;
+
+  const sql = `
+    SELECT 
+      v.VideoID, v.VideoTitle, v.ViewCount, v.UploadDate,
+      c.CompanyName,
+      s.Position, jc.CategoryName,
+      a.Duration
+    FROM Video v
+    LEFT JOIN Company c ON v.CompanyID = c.CompanyID
+    LEFT JOIN Summary s ON v.VideoID = s.VideoID
+    LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
+    LEFT JOIN Audio a ON v.VideoID = a.VideoID
+    WHERE v.VisibilityType = 'Public'
+    ORDER BY v.UploadDate DESC
+    LIMIT ?
+  `;
+  db.query(sql, [limit], (err, results) => {
+    if (err) {
+      console.error('Fetch weekly videos error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงข้อมูลสรุปประจำสัปดาห์' });
+    }
+    res.json(results);
+  });
+});
+
+// ==========================================
 // 🔍 [READ] API สำหรับค้นหา/กรองวิดีโอ (Filter)
 // ==========================================
 app.get('/api/videos/search', (req, res) => {
@@ -309,8 +370,14 @@ app.get('/api/videos/search', (req, res) => {
     SELECT 
       v.VideoID, v.VideoTitle, v.VideoPath, v.UploadDate, v.ViewCount,
       c.CompanyName, c.Location, c.BusinessType, c.WorkType,
-      s.Position, s.CategoryID,
-      jc.CategoryName
+      s.SummaryID, s.Position, s.CategoryID, s.PageCount, s.MainTopic,
+      jc.CategoryName,
+      (
+        SELECT GROUP_CONCAT(DISTINCT k.KeywordText SEPARATOR ', ')
+        FROM Summary_Keyword sk
+        JOIN Keyword k ON sk.KeywordID = k.KeywordID
+        WHERE sk.SummaryID = s.SummaryID
+      ) AS Keywords
     FROM Video v
     LEFT JOIN Company c ON v.CompanyID = c.CompanyID
     LEFT JOIN Summary s ON v.VideoID = s.VideoID
@@ -801,6 +868,105 @@ app.put('/api/summaries/:summaryId', (req, res) => {
       return res.status(404).json({ message: 'ไม่พบข้อมูลสรุปที่ต้องการแก้ไข' });
     }
     res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
+  });
+});
+
+// ==========================================
+// ❤️ [READ] API ดึงรายละเอียดวิดีโอที่ถูกใจทั้งหมดของผู้ใช้ (สำหรับหน้า Favorites)
+// คืนค่าโครงสร้างเดียวกับ /api/videos/search เพื่อให้ frontend ใช้งานร่วมกันได้
+// ==========================================
+app.get('/api/favorites/:uid/videos', (req, res) => {
+  const { uid } = req.params;
+  const sql = `
+    SELECT 
+      v.VideoID, v.VideoTitle, v.VideoPath, v.UploadDate, v.ViewCount,
+      c.CompanyName, c.Location, c.BusinessType, c.WorkType,
+      s.SummaryID, s.Position, s.CategoryID, s.PageCount, s.MainTopic,
+      jc.CategoryName,
+      (
+        SELECT GROUP_CONCAT(DISTINCT k.KeywordText SEPARATOR ', ')
+        FROM Summary_Keyword sk
+        JOIN Keyword k ON sk.KeywordID = k.KeywordID
+        WHERE sk.SummaryID = s.SummaryID
+      ) AS Keywords
+    FROM Favorite f
+    JOIN Video v ON f.VideoID = v.VideoID
+    LEFT JOIN Company c ON v.CompanyID = c.CompanyID
+    LEFT JOIN Summary s ON v.VideoID = s.VideoID
+    LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
+    WHERE f.UID = ?
+    ORDER BY f.CreateDate DESC
+  `;
+  db.query(sql, [uid], (err, results) => {
+    if (err) {
+      console.error('Fetch favorite videos error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงรายการโปรด' });
+    }
+    res.json(results);
+  });
+});
+
+// ==========================================
+// ❤️ [READ] API ดึงรายการโปรดของผู้ใช้ (สำหรับ Co-op Content / Favorites)
+// คืนค่าเป็น array ของ VideoID ที่ผู้ใช้กดถูกใจไว้
+// ==========================================
+app.get('/api/favorites/:uid', (req, res) => {
+  const { uid } = req.params;
+  const sql = 'SELECT VideoID FROM Favorite WHERE UID = ?';
+  db.query(sql, [uid], (err, results) => {
+    if (err) {
+      console.error('Fetch favorites error:', err);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการดึงรายการโปรด' });
+    }
+    res.json(results.map((r) => r.VideoID));
+  });
+});
+
+// ==========================================
+// ❤️ [INSERT] API เพิ่มวิดีโอเข้ารายการโปรด
+// ==========================================
+app.post('/api/favorites', (req, res) => {
+  const { uid, videoId } = req.body;
+
+  if (!uid || !videoId) {
+    return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน' });
+  }
+
+  const sqlCheck = 'SELECT FavoriteID FROM Favorite WHERE UID = ? AND VideoID = ?';
+  db.query(sqlCheck, [uid, videoId], (checkErr, checkResults) => {
+    if (checkErr) {
+      console.error('Check favorite error:', checkErr);
+      return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' });
+    }
+    if (checkResults.length > 0) {
+      return res.json({ message: 'อยู่ในรายการโปรดอยู่แล้ว' });
+    }
+
+    const favoriteId = `F${Date.now()}`;
+    const createDate = new Date().toISOString().slice(0, 10);
+    const sqlInsert = 'INSERT INTO Favorite (FavoriteID, UID, VideoID, CreateDate) VALUES (?, ?, ?, ?)';
+    db.query(sqlInsert, [favoriteId, uid, videoId, createDate], (insErr) => {
+      if (insErr) {
+        console.error('Add favorite error:', insErr);
+        return res.status(500).json({ message: 'เพิ่มรายการโปรดไม่สำเร็จ' });
+      }
+      res.json({ message: 'เพิ่มรายการโปรดสำเร็จ' });
+    });
+  });
+});
+
+// ==========================================
+// ❤️ [DELETE] API ลบวิดีโอออกจากรายการโปรด
+// ==========================================
+app.delete('/api/favorites/:uid/:videoId', (req, res) => {
+  const { uid, videoId } = req.params;
+  const sql = 'DELETE FROM Favorite WHERE UID = ? AND VideoID = ?';
+  db.query(sql, [uid, videoId], (err) => {
+    if (err) {
+      console.error('Remove favorite error:', err);
+      return res.status(500).json({ message: 'ลบรายการโปรดไม่สำเร็จ' });
+    }
+    res.json({ message: 'ลบรายการโปรดสำเร็จ' });
   });
 });
 
