@@ -368,6 +368,7 @@ app.get('/api/videos/filters', (req, res) => {
   const sqlBusinessTypes = 'SELECT BusinessTypeName FROM BusinessType ORDER BY BusinessTypeName';
   const sqlLocations = 'SELECT ProvinceNameEN, ProvinceNameTH FROM Province ORDER BY ProvinceNameEN';
   const sqlWorkTypes = "SELECT DISTINCT WorkType FROM Company WHERE WorkType IS NOT NULL AND WorkType <> '' ORDER BY WorkType";
+  const sqlPositions = 'SELECT PositionName FROM `Position` ORDER BY PositionName';
 
   db.query(sqlCategories, (err, categoryResults) => {
     if (err) { console.error(err); return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' }); }
@@ -381,11 +382,16 @@ app.get('/api/videos/filters', (req, res) => {
         db.query(sqlWorkTypes, (err4, workTypeResults) => {
           if (err4) { console.error(err4); return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' }); }
 
-          res.json({
-            categories: categoryResults.map((r) => r.CategoryName),
-            businessTypes: businessResults.map((r) => r.BusinessTypeName),
-            locations: locationResults.map((r) => ({ en: r.ProvinceNameEN, th: r.ProvinceNameTH })),
-            workTypes: workTypeResults.map((r) => r.WorkType),
+          db.query(sqlPositions, (err5, positionResults) => {
+            if (err5) { console.error(err5); return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' }); }
+
+            res.json({
+              categories: categoryResults.map((r) => r.CategoryName),
+              businessTypes: businessResults.map((r) => r.BusinessTypeName),
+              locations: locationResults.map((r) => ({ en: r.ProvinceNameEN, th: r.ProvinceNameTH })),
+              workTypes: workTypeResults.map((r) => r.WorkType),
+              positions: positionResults.map((r) => r.PositionName),
+            });
           });
         });
       });
@@ -397,12 +403,12 @@ app.get('/api/videos/filters', (req, res) => {
 // 🔍 [READ] API สำหรับค้นหา/กรองวิดีโอ (Filter)
 // ==========================================
 app.get('/api/videos/search', (req, res) => {
-  const { category, businessType, location, workType, keyword } = req.query;
+  const { category, businessType, location, workType, position, keyword } = req.query;
 
   let sql = `
-    SELECT 
+    SELECT
       v.VideoID, v.VideoTitle, v.VideoPath, v.UploadDate, v.ViewCount,
-      c.CompanyName, c.Location, c.BusinessType, c.WorkType,
+      c.CompanyName, c.Location, c.BusinessType, c.WorkType, c.Position AS CompanyPosition,
       s.SummaryID, s.Position, s.CategoryID, s.PageCount, s.MainTopic,
       jc.CategoryName,
       (
@@ -437,6 +443,10 @@ app.get('/api/videos/search', (req, res) => {
       sql += ` AND c.WorkType IN (${types.map(() => '?').join(',')})`;
       params.push(...types);
     }
+  }
+  if (position) {
+    sql += ' AND c.Position = ?';
+    params.push(position);
   }
   if (keyword) {
     sql += ' AND (v.VideoTitle LIKE ? OR s.Position LIKE ? OR c.CompanyName LIKE ?)';
