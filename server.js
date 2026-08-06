@@ -361,6 +361,39 @@ app.get('/api/videos/weekly', (req, res) => {
 });
 
 // ==========================================
+// 🗂️ [READ] API สำหรับดึงตัวเลือกตัวกรอง (Filter Options) จากฐานข้อมูลจริง
+// ==========================================
+app.get('/api/videos/filters', (req, res) => {
+  const sqlCategories = 'SELECT CategoryName FROM JobCategory ORDER BY CategoryName';
+  const sqlBusinessTypes = 'SELECT BusinessTypeName FROM BusinessType ORDER BY BusinessTypeName';
+  const sqlLocations = 'SELECT ProvinceNameEN, ProvinceNameTH FROM Province ORDER BY ProvinceNameEN';
+  const sqlWorkTypes = "SELECT DISTINCT WorkType FROM Company WHERE WorkType IS NOT NULL AND WorkType <> '' ORDER BY WorkType";
+
+  db.query(sqlCategories, (err, categoryResults) => {
+    if (err) { console.error(err); return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' }); }
+
+    db.query(sqlBusinessTypes, (err2, businessResults) => {
+      if (err2) { console.error(err2); return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' }); }
+
+      db.query(sqlLocations, (err3, locationResults) => {
+        if (err3) { console.error(err3); return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' }); }
+
+        db.query(sqlWorkTypes, (err4, workTypeResults) => {
+          if (err4) { console.error(err4); return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' }); }
+
+          res.json({
+            categories: categoryResults.map((r) => r.CategoryName),
+            businessTypes: businessResults.map((r) => r.BusinessTypeName),
+            locations: locationResults.map((r) => ({ en: r.ProvinceNameEN, th: r.ProvinceNameTH })),
+            workTypes: workTypeResults.map((r) => r.WorkType),
+          });
+        });
+      });
+    });
+  });
+});
+
+// ==========================================
 // 🔍 [READ] API สำหรับค้นหา/กรองวิดีโอ (Filter)
 // ==========================================
 app.get('/api/videos/search', (req, res) => {
@@ -724,20 +757,56 @@ app.patch('/api/users/:id/role', async (req, res) => {
       return res.status(401).json({ message: 'รหัสผ่านไม่ถูกต้อง' });
     }
 
-    // 4. อัปเดต RoleID ของผู้ใช้เป้าหมาย
-    const sqlUpdate = 'UPDATE customer SET RoleID = ? WHERE UID = ?';
-    db.query(sqlUpdate, [newRole, id], (updErr, result) => {
-      if (updErr) {
-        console.error('Update role error:', updErr);
-        return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการอัปเดตสิทธิ์ผู้ใช้' });
-      }
+    // 4. ถ้าเป็นการถอดสิทธิ์ Admin ต้องเช็คก่อนว่าเหลือ Admin คนสุดท้ายอยู่หรือไม่
+    const finishUpdate = () => {
+      const sqlUpdate = 'UPDATE customer SET RoleID = ? WHERE UID = ?';
+      db.query(sqlUpdate, [newRole, id], (updErr, result) => {
+        if (updErr) {
+          console.error('Update role error:', updErr);
+          return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการอัปเดตสิทธิ์ผู้ใช้' });
+        }
 
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: 'ไม่พบผู้ใช้ที่ต้องการเปลี่ยนสิทธิ์' });
-      }
+        if (result.affectedRows === 0) {
+          return res.status(404).json({ message: 'ไม่พบผู้ใช้ที่ต้องการเปลี่ยนสิทธิ์' });
+        }
 
-      res.json({ message: 'เปลี่ยนสิทธิ์ผู้ใช้สำเร็จ', uid: id, newRole });
-    });
+        res.json({ message: 'เปลี่ยนสิทธิ์ผู้ใช้สำเร็จ', uid: id, newRole });
+      });
+    };
+
+    if (newRole !== 'R001') {
+      const sqlCheck = 'SELECT RoleID FROM customer WHERE UID = ?';
+      db.query(sqlCheck, [id], (checkErr, targetResults) => {
+        if (checkErr) {
+          console.error('Fetch target user error:', checkErr);
+          return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' });
+        }
+
+        if (targetResults.length === 0) {
+          return res.status(404).json({ message: 'ไม่พบผู้ใช้ที่ต้องการเปลี่ยนสิทธิ์' });
+        }
+
+        if (targetResults[0].RoleID !== 'R001') {
+          return finishUpdate();
+        }
+
+        const sqlCountAdmins = "SELECT COUNT(*) AS cnt FROM customer WHERE RoleID = 'R001'";
+        db.query(sqlCountAdmins, (countErr, countResults) => {
+          if (countErr) {
+            console.error('Count admins error:', countErr);
+            return res.status(500).json({ message: 'เกิดข้อผิดพลาดของระบบ' });
+          }
+
+          if (countResults[0].cnt <= 1) {
+            return res.status(400).json({ message: 'ไม่สามารถถอดสิทธิ์ Admin ได้ เนื่องจากเป็น Admin คนสุดท้ายในระบบ' });
+          }
+
+          finishUpdate();
+        });
+      });
+    } else {
+      finishUpdate();
+    }
   });
 });
 
