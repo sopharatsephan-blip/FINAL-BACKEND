@@ -8,7 +8,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { transcribeAudio } = require('./transcribe');
-const { summarize } = require('./lexrank');
+const { summarize } = require('./typhoon');
 const dashboardRoutes = require('./dashboard');
 const app = express();
 app.use(cors());
@@ -409,14 +409,8 @@ app.get('/api/videos/search', (req, res) => {
     SELECT
       v.VideoID, v.VideoTitle, v.VideoPath, v.UploadDate, v.ViewCount,
       c.CompanyName, c.Location, c.BusinessType, c.WorkType, c.Position AS CompanyPosition,
-      s.SummaryID, s.Position, s.CategoryID, s.PageCount, s.MainTopic,
-      jc.CategoryName,
-      (
-        SELECT GROUP_CONCAT(DISTINCT k.KeywordText SEPARATOR ', ')
-        FROM Summary_Keyword sk
-        JOIN Keyword k ON sk.KeywordID = k.KeywordID
-        WHERE sk.SummaryID = s.SummaryID
-      ) AS Keywords
+      s.SummaryID, s.Position, s.CategoryID,
+      jc.CategoryName
     FROM Video v
     LEFT JOIN Company c ON v.CompanyID = c.CompanyID
     LEFT JOIN Summary s ON v.VideoID = s.VideoID
@@ -505,8 +499,8 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
 });
 
 // ==========================================
-// 🧠 [PROCESS] API สรุปวิดีโอด้วย Speech-to-Text + LexRank
-// ขั้นตอน: หา path วิดีโอ -> แยกเสียง -> ถอดเป็นข้อความ -> สรุปด้วย LexRank -> บันทึกลง DB
+// 🧠 [PROCESS] API สรุปวิดีโอด้วย Speech-to-Text + Typhoon LLM
+// ขั้นตอน: หา path วิดีโอ -> แยกเสียง -> ถอดเป็นข้อความ -> สรุปด้วย Typhoon -> บันทึกลง DB
 // หมายเหตุ: ตาราง Summary ไม่มีคอลัมน์ Transcript ตรง ๆ (มีแต่ TranscriptID ที่เป็น FK
 // ไปตาราง Transcript และเป็น NOT NULL) จึงต้อง insert Transcript ก่อนเสมอ แล้วค่อยเอา
 // TranscriptID ที่ได้ไปสร้าง/อัปเดต Summary
@@ -533,9 +527,9 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
         return res.status(422).json({ message: 'ไม่สามารถถอดเสียงจากวิดีโอนี้ได้ (ไม่พบคำพูด)' });
       }
 
-      // 3. สรุปด้วย LexRank
-      console.log(`📝 กำลังสรุปข้อความด้วย LexRank ...`);
-      const summaryText = summarize(transcript, numSentences || 5);
+      // 3. สรุปด้วย Typhoon LLM
+      console.log(`📝 กำลังสรุปข้อความด้วย Typhoon ...`);
+      const summaryText = await summarize(transcript, numSentences || 5);
 
       // 4. บันทึก Transcript ก่อน (Summary ต้องผูกกับ TranscriptID)
       const transcriptId = `T${Date.now()}`;
@@ -605,7 +599,7 @@ app.get('/api/videos/:id/summary', (req, res) => {
 
   const sql = `
     SELECT 
-      s.SummaryID, s.SummaryText, s.MainTopic, s.Position,
+      s.SummaryID, s.SummaryText, s.Position,
       t.TranscriptText AS Transcript
     FROM Video v
     LEFT JOIN Summary s ON v.VideoID = s.VideoID
@@ -632,7 +626,6 @@ app.get('/api/videos/:id/summary', (req, res) => {
     res.json({
       SummaryID: row.SummaryID,
       SummaryText: row.SummaryText,
-      MainTopic: row.MainTopic,
       Position: row.Position,
       Transcript: row.Transcript,
     });
@@ -904,7 +897,6 @@ app.get('/api/summaries/video/:videoId', (req, res) => {
     LEFT JOIN Company c ON v.CompanyID = c.CompanyID
     LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
     WHERE s.VideoID = ?
-    ORDER BY s.CreateDate DESC, s.CreateTime DESC
     LIMIT 1
   `;
   db.query(sql, [videoId], (err, results) => {
@@ -960,14 +952,8 @@ app.get('/api/favorites/:uid/videos', (req, res) => {
     SELECT 
       v.VideoID, v.VideoTitle, v.VideoPath, v.UploadDate, v.ViewCount,
       c.CompanyName, c.Location, c.BusinessType, c.WorkType,
-      s.SummaryID, s.Position, s.CategoryID, s.PageCount, s.MainTopic,
-      jc.CategoryName,
-      (
-        SELECT GROUP_CONCAT(DISTINCT k.KeywordText SEPARATOR ', ')
-        FROM Summary_Keyword sk
-        JOIN Keyword k ON sk.KeywordID = k.KeywordID
-        WHERE sk.SummaryID = s.SummaryID
-      ) AS Keywords
+      s.SummaryID, s.Position, s.CategoryID,
+      jc.CategoryName
     FROM Favorite f
     JOIN Video v ON f.VideoID = v.VideoID
     LEFT JOIN Company c ON v.CompanyID = c.CompanyID

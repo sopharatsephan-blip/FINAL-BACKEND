@@ -7,7 +7,7 @@ router.get('/video/:videoId', (req, res) => {
   const { videoId } = req.params;
   const sql = `
     SELECT
-      s.SummaryID, s.SummaryText, s.MainTopic, s.CategoryID,
+      s.SummaryID, s.SummaryText, s.CategoryID,
       v.VideoID, v.VideoTitle, v.CompanyID,
       c.CompanyName, c.Location AS Province, c.WorkType, c.Position AS CompanyPosition,
       jc.CategoryName
@@ -67,31 +67,63 @@ router.put('/:summaryId', (req, res) => {
     if (summaryContent !== undefined) { summaryFields.push('SummaryText = ?'); summaryValues.push(summaryContent); }
 
     const updateCompanyAndRespond = () => {
-      // WorkType, Location (Province) และ Position อยู่ที่ระดับ Company จึงอัปเดตผ่าน JOIN ย้อนจาก SummaryID
+      // WorkType, Location (Province) และ Position อยู่ที่ระดับ Company
       const companyFields = [];
       const companyValues = [];
-      if (workStyle !== undefined) { companyFields.push('c.WorkType = ?'); companyValues.push(workStyle); }
-      if (province !== undefined) { companyFields.push('c.Location = ?'); companyValues.push(province); }
-      if (position !== undefined) { companyFields.push('c.Position = ?'); companyValues.push(position); }
+      if (workStyle !== undefined) { companyFields.push('WorkType = ?'); companyValues.push(workStyle); }
+      if (province !== undefined) { companyFields.push('Location = ?'); companyValues.push(province); }
+      if (position !== undefined) { companyFields.push('Position = ?'); companyValues.push(position); }
 
       if (companyFields.length === 0) {
         return res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
       }
 
-      const sqlCompany = `
-        UPDATE Company c
-        JOIN Video v ON c.CompanyID = v.CompanyID
-        JOIN Summary s ON v.VideoID = s.VideoID
-        SET ${companyFields.join(', ')}
-        WHERE s.SummaryID = ?
-      `;
-      db.query(sqlCompany, [...companyValues, summaryId], (companyErr) => {
-        if (companyErr) {
-          console.error(companyErr);
-          return res.status(500).json({ message: 'Internal server error' });
+      // หา VideoID/CompanyID ปัจจุบันของวิดีโอนี้ก่อน เพราะตอนอัปโหลดวิดีโอยังไม่ถูกผูกกับ Company
+      // (CompanyID เป็น NULL) การ UPDATE ผ่าน JOIN แบบเดิมจึงไม่ match แถวไหนเลยและข้อมูลไม่ถูกบันทึก
+      db.query(
+        'SELECT v.VideoID, v.CompanyID FROM Summary s JOIN Video v ON s.VideoID = v.VideoID WHERE s.SummaryID = ?',
+        [summaryId],
+        (findErr, rows) => {
+          if (findErr) {
+            console.error(findErr);
+            return res.status(500).json({ message: 'Internal server error' });
+          }
+          if (rows.length === 0) {
+            return res.status(404).json({ message: 'ไม่พบข้อมูลสรุปนี้' });
+          }
+          const { VideoID, CompanyID } = rows[0];
+
+          if (!CompanyID) {
+            // ยังไม่มี Company ผูกกับวิดีโอนี้ -> สร้างแถวใหม่ในตาราง Company แล้วผูกเข้ากับ Video
+            const newCompanyId = `C${Date.now()}`;
+            const columns = companyFields.map((f) => f.split(' = ')[0]);
+            const sqlInsertCompany = `INSERT INTO Company (CompanyID, ${columns.join(', ')}) VALUES (?, ${columns.map(() => '?').join(', ')})`;
+            db.query(sqlInsertCompany, [newCompanyId, ...companyValues], (insErr) => {
+              if (insErr) {
+                console.error(insErr);
+                return res.status(500).json({ message: 'Internal server error' });
+              }
+              db.query('UPDATE Video SET CompanyID = ? WHERE VideoID = ?', [newCompanyId, VideoID], (linkErr) => {
+                if (linkErr) {
+                  console.error(linkErr);
+                  return res.status(500).json({ message: 'Internal server error' });
+                }
+                res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
+              });
+            });
+            return;
+          }
+
+          const sqlCompany = `UPDATE Company SET ${companyFields.join(', ')} WHERE CompanyID = ?`;
+          db.query(sqlCompany, [...companyValues, CompanyID], (companyErr) => {
+            if (companyErr) {
+              console.error(companyErr);
+              return res.status(500).json({ message: 'Internal server error' });
+            }
+            res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
+          });
         }
-        res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
-      });
+      );
     };
 
     if (summaryFields.length === 0) {
