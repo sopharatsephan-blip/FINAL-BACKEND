@@ -1,18 +1,40 @@
 // ==========================================
 // typhoon.js
 // สรุปข้อความภาษาไทยด้วย Typhoon LLM API (api.opentyphoon.ai)
-// รับ transcript (ข้อความเต็ม) -> ส่งให้ Typhoon สรุปตรงๆ แล้วคืนข้อความสรุป
+// รับ transcript (ข้อความเต็ม) -> ส่งให้ Typhoon สรุปตามหัวข้อรายงานฝึกงาน -> คืนข้อความสรุป
 // ==========================================
 const TYPHOON_API_URL = 'https://api.opentyphoon.ai/v1/chat/completions';
 const TYPHOON_MODEL = process.env.TYPHOON_MODEL || 'typhoon-v2.5-30b-a3b-instruct';
 
+// หัวข้อบังคับของบทสรุปฝึกงาน เรียงตามลำดับที่ต้องปรากฏในผลลัพธ์เสมอ
+const SUMMARY_TOPICS = [
+  'ชื่อหน่วยงานและสถานประกอบการ',
+  'ตำแหน่งและลักษณะงานที่ทำ',
+  'Project หรืองานที่ทำระหว่างฝึกงาน',
+  'ปัญหาที่พบและวิธีการแก้ไข (ถ้ามี)',
+  'สิ่งที่ได้จากการได้ไปฝึกงานในครั้งนี้',
+  'จากประสบการณ์ไปฝึกงาน นักศึกษาคิดจะเปลี่ยนแนวอาชีพการทำงานในอนาคตไปจากประสบการณ์ฝึกงานที่ไปหรือไม่ เพราะอะไร',
+  'หน่วยงานที่นักศึกษาไปฝึกงาน ควรจะให้รุ่นน้องไปฝึกงานหรือไม่ เพราะอะไร',
+  'ข้อเสนอแนะสำหรับรุ่นน้องที่จะไปฝึกงานรุ่นต่อไป',
+];
+
+const SUMMARY_SYSTEM_PROMPT = `คุณเป็นผู้ช่วยสรุปบทสัมภาษณ์นักศึกษาฝึกงานเป็นภาษาไทย
+สรุปเนื้อหาที่ได้รับตามหัวข้อที่กำหนดไว้ทั้ง ${SUMMARY_TOPICS.length} หัวข้อ ตามลำดับ ห้ามสลับลำดับ ห้ามเพิ่มหรือลดหัวข้อ
+รูปแบบผลลัพธ์: แต่ละหัวข้อขึ้นต้นด้วย "หมายเลข. ชื่อหัวข้อ" บรรทัดถัดไปเป็นเนื้อหาสรุปของหัวข้อนั้นแบบร้อยแก้ว กระชับ ได้ใจความ
+เว้นบรรทัดว่างคั่นระหว่างแต่ละหัวข้อ ห้ามใช้สัญลักษณ์ markdown เช่น # หรือ ** ห้ามมีคำนำหรือคำลงท้ายอื่นใดนอกเหนือจาก ${SUMMARY_TOPICS.length} หัวข้อนี้
+ถ้าเนื้อหาต้นฉบับไม่มีข้อมูลเพียงพอสำหรับหัวข้อใด ให้เขียนว่า "ไม่มีข้อมูลในบทสัมภาษณ์" สำหรับหัวข้อนั้น`;
+
+function buildUserPrompt(text) {
+  const topicList = SUMMARY_TOPICS.map((topic, idx) => `${idx + 1}. ${topic}`).join('\n');
+  return `นี่คือบทถอดเสียงสัมภาษณ์นักศึกษาเกี่ยวกับการฝึกงาน:\n\n${text}\n\nโปรดสรุปเนื้อหาข้างต้นให้ครบทั้ง ${SUMMARY_TOPICS.length} หัวข้อต่อไปนี้ ตามลำดับ:\n${topicList}`;
+}
+
 /**
- * สรุป transcript ด้วย Typhoon LLM
+ * สรุป transcript ด้วย Typhoon LLM ตามหัวข้อรายงานฝึกงานที่กำหนดไว้ตายตัว
  * @param {string} text - transcript เต็ม
- * @param {number} numSentences - จำนวนประโยคสรุปที่ต้องการโดยประมาณ (default 5)
- * @returns {Promise<string>} ข้อความสรุป
+ * @returns {Promise<string>} ข้อความสรุปแบ่งตามหัวข้อ
  */
-async function summarize(text, numSentences = 5) {
+async function summarize(text) {
   if (!text || !text.trim()) return '';
 
   const apiKey = process.env.TYPHOON_API_KEY;
@@ -31,14 +53,14 @@ async function summarize(text, numSentences = 5) {
       messages: [
         {
           role: 'system',
-          content: 'คุณเป็นผู้ช่วยสรุปเนื้อหาภาษาไทย ตอบกลับเป็นข้อความสรุปล้วนๆ ไม่ต้องมีคำนำหรือหัวข้อเพิ่มเติม',
+          content: SUMMARY_SYSTEM_PROMPT,
         },
         {
           role: 'user',
-          content: `สรุปเนื้อหาต่อไปนี้ให้กระชับ ความยาวประมาณ ${numSentences} ประโยค โดยคงใจความสำคัญไว้ครบถ้วน:\n\n${text}`,
+          content: buildUserPrompt(text),
         },
       ],
-      max_tokens: 1024,
+      max_tokens: 2048,
       temperature: 0.3,
     }),
   });

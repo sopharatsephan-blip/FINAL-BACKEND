@@ -507,7 +507,6 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
 // ==========================================
 app.post('/api/videos/:id/summarize', async (req, res) => {
   const { id } = req.params;
-  const { numSentences } = req.body; // จำนวนประโยคสรุปที่ต้องการ (ไม่ระบุ = ใช้ค่า default 5)
 
   // 1. หา path ไฟล์วิดีโอจาก DB
   const sqlSelect = 'SELECT VideoPath FROM Video WHERE VideoID = ?';
@@ -529,7 +528,7 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
 
       // 3. สรุปด้วย Typhoon LLM
       console.log(`📝 กำลังสรุปข้อความด้วย Typhoon ...`);
-      const summaryText = await summarize(transcript, numSentences || 5);
+      const summaryText = await summarize(transcript);
 
       // 4. บันทึก Transcript ก่อน (Summary ต้องผูกกับ TranscriptID)
       const transcriptId = `T${Date.now()}`;
