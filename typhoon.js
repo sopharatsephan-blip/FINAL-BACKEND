@@ -112,4 +112,17 @@ function extractTitleFromSummary(summaryText) {
   return [orgName, position].filter(Boolean).join(' - ');
 }
 
-module.exports = { summarize, extractTitleFromSummary };
+/**
+ * ตัดข้อความให้ไม่เกินความยาวที่กำหนด (ใช้ก่อนบันทึกลงคอลัมน์ VARCHAR ที่จำกัดความยาว
+ * เช่น Video.VideoTitle ซึ่งเป็น varchar(100)) เพื่อกัน error ER_DATA_TOO_LONG
+ * @param {string} str
+ * @param {number} maxLen
+ * @returns {string}
+ */
+function truncate(str, maxLen) {
+  if (!str) return str;
+  if (str.length <= maxLen) return str;
+  return `${str.slice(0, maxLen - 1).trimEnd()}…`;
+}
+
+module.exports = { summarize, extractTitleFromSummary, truncate };

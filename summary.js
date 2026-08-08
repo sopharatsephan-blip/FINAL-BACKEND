@@ -1,15 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const db = require('./db'); // ✅ ใช้ pool กลางจาก db.js แทนการสร้าง connection เอง
+const { extractTitleFromSummary, truncate } = require('./typhoon');
 
 // GET /api/summaries/video/:videoId - ดึงข้อมูลสรุปตาม VideoID
 router.get('/video/:videoId', (req, res) => {
   const { videoId } = req.params;
   const sql = `
     SELECT
-      s.SummaryID, s.SummaryText, s.CategoryID,
+      s.SummaryID, s.SummaryText, s.CategoryID, s.Position AS SummaryPosition,
       v.VideoID, v.VideoTitle, v.CompanyID,
-      c.CompanyName, c.Location AS Province, c.WorkType, c.Position AS CompanyPosition, c.BusinessType,
+      c.CompanyName, c.Location AS Province, c.WorkType, c.BusinessType,
       jc.CategoryName
     FROM Summary s
     JOIN Video v ON s.VideoID = v.VideoID
@@ -28,14 +29,17 @@ router.get('/video/:videoId', (req, res) => {
     }
 
     const row = results[0];
+    // ชื่อสรุป: ถ้ายังไม่เคยแก้ไข (ไม่มี CompanyName) ให้คำนวณสดจากข้อ 1 + ข้อ 2 ของ SummaryText เสมอ
+    // (ไม่พึ่ง VideoTitle ที่บันทึกไว้ตอนประมวลผล เพราะวิดีโอเก่าบางตัวอาจไม่เคยถูกตั้งชื่อนี้)
+    const generatedName = truncate(extractTitleFromSummary(row.SummaryText), 100); // จำกัดตาม Video.VideoTitle varchar(100) เพื่อให้ค่าที่แสดงตรงกับค่าที่บันทึกได้จริง
     res.json({
       summaryId: row.SummaryID,   // เก็บไว้ใช้ตอน PUT
       videoId: row.VideoID,
-      company: row.CompanyName || '',
+      company: row.CompanyName || generatedName || row.VideoTitle || '',
       category: row.CategoryName || '',
       province: row.Province || '',
       workStyle: row.WorkType || '',
-      position: row.CompanyPosition || '',
+      position: row.SummaryPosition || '',
       businessType: row.BusinessType || '',
       summaryContent: row.SummaryText || '',
     });
@@ -61,20 +65,20 @@ router.put('/:summaryId', (req, res) => {
       return res.status(500).json({ message: 'Internal server error' });
     }
 
-    // อัปเดตเฉพาะฟิลด์ของ Summary ที่ถูกส่งมาจริงๆ
+    // อัปเดตเฉพาะฟิลด์ของ Summary ที่ถูกส่งมาจริงๆ (Position อยู่ที่ระดับ Summary ไม่ใช่ Company)
     const summaryFields = [];
     const summaryValues = [];
     if (categoryId !== undefined) { summaryFields.push('CategoryID = ?'); summaryValues.push(categoryId); }
     if (summaryContent !== undefined) { summaryFields.push('SummaryText = ?'); summaryValues.push(summaryContent); }
+    if (position !== undefined) { summaryFields.push('Position = ?'); summaryValues.push(position); }
 
     const updateCompanyAndRespond = () => {
-      // WorkType, Location (Province), Position และ BusinessType อยู่ที่ระดับ Company
+      // WorkType, Location (Province) และ BusinessType อยู่ที่ระดับ Company
       const companyFields = [];
       const companyValues = [];
-      if (company !== undefined) { companyFields.push('CompanyName = ?'); companyValues.push(company); }
+      if (company !== undefined) { companyFields.push('CompanyName = ?'); companyValues.push(truncate(company, 255)); } // Company.CompanyName varchar(255)
       if (workStyle !== undefined) { companyFields.push('WorkType = ?'); companyValues.push(workStyle); }
       if (province !== undefined) { companyFields.push('Location = ?'); companyValues.push(province); }
-      if (position !== undefined) { companyFields.push('Position = ?'); companyValues.push(position); }
       if (businessType !== undefined) { companyFields.push('BusinessType = ?'); companyValues.push(businessType); }
 
       if (companyFields.length === 0) {
@@ -84,7 +88,7 @@ router.put('/:summaryId', (req, res) => {
       // ชื่อ Company ที่กรอกจะถูกใช้เป็นชื่อวิดีโอ (VideoTitle) ด้วย
       const finishWithVideoTitle = (videoId) => {
         if (company !== undefined && company.trim() !== '') {
-          db.query('UPDATE Video SET VideoTitle = ? WHERE VideoID = ?', [company, videoId], (titleErr) => {
+          db.query('UPDATE Video SET VideoTitle = ? WHERE VideoID = ?', [truncate(company, 100), videoId], (titleErr) => { // Video.VideoTitle varchar(100)
             if (titleErr) {
               console.error(titleErr);
               return res.status(500).json({ message: 'Internal server error' });

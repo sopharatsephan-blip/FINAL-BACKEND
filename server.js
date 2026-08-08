@@ -8,7 +8,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { transcribeAudio } = require('./transcribe');
-const { summarize, extractTitleFromSummary } = require('./typhoon');
+const { summarize, extractTitleFromSummary, truncate } = require('./typhoon');
 const dashboardRoutes = require('./dashboard');
 const app = express();
 app.use(cors());
@@ -364,10 +364,11 @@ app.get('/api/videos/weekly', (req, res) => {
 // 🗂️ [READ] API สำหรับดึงตัวเลือกตัวกรอง (Filter Options) จากฐานข้อมูลจริง
 // ==========================================
 app.get('/api/videos/filters', (req, res) => {
+  // Category/BusinessType/Province/WorkType/Position เป็น master data ตายตัว (ให้เลือกได้ครบตั้งแต่ยังไม่มีใครกรอกข้อมูล)
   const sqlCategories = 'SELECT CategoryName FROM JobCategory ORDER BY CategoryName';
   const sqlBusinessTypes = 'SELECT BusinessTypeName FROM BusinessType ORDER BY BusinessTypeName';
   const sqlLocations = 'SELECT ProvinceNameEN, ProvinceNameTH FROM Province ORDER BY ProvinceNameEN';
-  const sqlWorkTypes = "SELECT DISTINCT WorkType FROM Company WHERE WorkType IS NOT NULL AND WorkType <> '' ORDER BY WorkType";
+  const sqlWorkTypes = 'SELECT WorkTypeName FROM WorkType ORDER BY WorkTypeID';
   const sqlPositions = 'SELECT PositionName FROM `Position` ORDER BY PositionName';
 
   db.query(sqlCategories, (err, categoryResults) => {
@@ -389,7 +390,7 @@ app.get('/api/videos/filters', (req, res) => {
               categories: categoryResults.map((r) => r.CategoryName),
               businessTypes: businessResults.map((r) => r.BusinessTypeName),
               locations: locationResults.map((r) => ({ en: r.ProvinceNameEN, th: r.ProvinceNameTH })),
-              workTypes: workTypeResults.map((r) => r.WorkType),
+              workTypes: workTypeResults.map((r) => r.WorkTypeName),
               positions: positionResults.map((r) => r.PositionName),
             });
           });
@@ -408,7 +409,7 @@ app.get('/api/videos/search', (req, res) => {
   let sql = `
     SELECT
       v.VideoID, v.VideoTitle, v.VideoPath, v.UploadDate, v.ViewCount,
-      c.CompanyName, c.Location, c.BusinessType, c.WorkType, c.Position AS CompanyPosition,
+      c.CompanyName, c.Location, c.BusinessType, c.WorkType,
       s.SummaryID, s.Position, s.CategoryID,
       jc.CategoryName
     FROM Video v
@@ -439,7 +440,7 @@ app.get('/api/videos/search', (req, res) => {
     }
   }
   if (position) {
-    sql += ' AND c.Position = ?';
+    sql += ' AND s.Position = ?';
     params.push(position);
   }
   if (keyword) {
@@ -531,7 +532,7 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
       const summaryText = await summarize(transcript);
 
       // 3.1 ตั้งชื่อวิดีโอจากหัวข้อที่ 1 (ชื่อหน่วยงาน) + หัวข้อที่ 2 (ตำแหน่งงาน) ของบทสรุป
-      const generatedTitle = extractTitleFromSummary(summaryText);
+      const generatedTitle = truncate(extractTitleFromSummary(summaryText), 100); // Video.VideoTitle เป็น varchar(100)
       if (generatedTitle) {
         db.query('UPDATE Video SET VideoTitle = ? WHERE VideoID = ?', [generatedTitle, id], (titleErr) => {
           if (titleErr) console.error('Update video title error:', titleErr);
@@ -645,6 +646,7 @@ app.get('/api/videos/:id/summary', (req, res) => {
 // ==========================================
 app.get('/api/videos/:id', (req, res) => {
   const { id } = req.params;
+  const isAdmin = req.query.roleId === 'R001'; // R001 = Admin (ดู Private ได้), role อื่นดูได้เฉพาะ Public
 
   const sql = `
     SELECT 
@@ -671,7 +673,13 @@ app.get('/api/videos/:id', (req, res) => {
       return res.status(404).json({ message: 'ไม่พบวิดีโอนี้ในระบบ' });
     }
 
-    res.json(results[0]);
+    const video = results[0];
+    // วิดีโอที่เป็น Private ให้เห็นเฉพาะ Admin เท่านั้น ส่วน role อื่น (เช่น Student) ตอบเหมือนไม่พบวิดีโอ
+    if (video.VisibilityType !== 'Public' && !isAdmin) {
+      return res.status(404).json({ message: 'ไม่พบวิดีโอนี้ในระบบ' });
+    }
+
+    res.json(video);
   });
 });
 
