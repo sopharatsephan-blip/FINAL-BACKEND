@@ -80,4 +80,36 @@ async function summarize(text) {
   return summaryText;
 }
 
-module.exports = { summarize };
+/**
+ * ดึงเนื้อหาของหัวข้อที่ 1 (ชื่อหน่วยงานและสถานประกอบการ) และหัวข้อที่ 2
+ * (ตำแหน่งและลักษณะงานที่ทำ) จากข้อความสรุป แล้วต่อกันไว้ใช้เป็นชื่อวิดีโอ
+ * @param {string} summaryText - ข้อความสรุปที่ได้จาก summarize()
+ * @returns {string} ชื่อวิดีโอที่ประกอบจากหัวข้อที่ 1 และ 2 (ว่างถ้าหาหัวข้อไม่เจอ)
+ */
+function extractTitleFromSummary(summaryText) {
+  if (!summaryText) return '';
+
+  const getTopicContent = (topicIndex) => {
+    const topic = SUMMARY_TOPICS[topicIndex];
+    const nextTopic = SUMMARY_TOPICS[topicIndex + 1];
+
+    const start = summaryText.indexOf(topic);
+    if (start === -1) return '';
+
+    const contentStart = start + topic.length;
+    const end = nextTopic ? summaryText.indexOf(nextTopic, contentStart) : -1;
+    const raw = end === -1 ? summaryText.slice(contentStart) : summaryText.slice(contentStart, end);
+
+    return raw
+      .replace(/\d+\.\s*$/, '') // ตัดเลขหัวข้อถัดไปที่ติดมาท้ายข้อความ (เช่น "2. ")
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  const orgName = getTopicContent(0);
+  const position = getTopicContent(1);
+
+  return [orgName, position].filter(Boolean).join(' - ');
+}
+
+module.exports = { summarize, extractTitleFromSummary };

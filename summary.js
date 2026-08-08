@@ -9,7 +9,7 @@ router.get('/video/:videoId', (req, res) => {
     SELECT
       s.SummaryID, s.SummaryText, s.CategoryID,
       v.VideoID, v.VideoTitle, v.CompanyID,
-      c.CompanyName, c.Location AS Province, c.WorkType, c.Position AS CompanyPosition,
+      c.CompanyName, c.Location AS Province, c.WorkType, c.Position AS CompanyPosition, c.BusinessType,
       jc.CategoryName
     FROM Summary s
     JOIN Video v ON s.VideoID = v.VideoID
@@ -36,6 +36,7 @@ router.get('/video/:videoId', (req, res) => {
       province: row.Province || '',
       workStyle: row.WorkType || '',
       position: row.CompanyPosition || '',
+      businessType: row.BusinessType || '',
       summaryContent: row.SummaryText || '',
     });
   });
@@ -44,7 +45,7 @@ router.get('/video/:videoId', (req, res) => {
 // PUT /api/summaries/:summaryId - บันทึกการแก้ไข (รองรับการส่งมาแค่บางฟิลด์ เช่น ตอนกด Share ที่ส่งแค่ position)
 router.put('/:summaryId', (req, res) => {
   const { summaryId } = req.params;
-  const { category, workStyle, province, position, summaryContent } = req.body;
+  const { company, category, workStyle, province, position, businessType, summaryContent } = req.body;
 
   const findCategoryId = (callback) => {
     if (category === undefined) return callback(null, undefined);
@@ -67,16 +68,33 @@ router.put('/:summaryId', (req, res) => {
     if (summaryContent !== undefined) { summaryFields.push('SummaryText = ?'); summaryValues.push(summaryContent); }
 
     const updateCompanyAndRespond = () => {
-      // WorkType, Location (Province) และ Position อยู่ที่ระดับ Company
+      // WorkType, Location (Province), Position และ BusinessType อยู่ที่ระดับ Company
       const companyFields = [];
       const companyValues = [];
+      if (company !== undefined) { companyFields.push('CompanyName = ?'); companyValues.push(company); }
       if (workStyle !== undefined) { companyFields.push('WorkType = ?'); companyValues.push(workStyle); }
       if (province !== undefined) { companyFields.push('Location = ?'); companyValues.push(province); }
       if (position !== undefined) { companyFields.push('Position = ?'); companyValues.push(position); }
+      if (businessType !== undefined) { companyFields.push('BusinessType = ?'); companyValues.push(businessType); }
 
       if (companyFields.length === 0) {
         return res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
       }
+
+      // ชื่อ Company ที่กรอกจะถูกใช้เป็นชื่อวิดีโอ (VideoTitle) ด้วย
+      const finishWithVideoTitle = (videoId) => {
+        if (company !== undefined && company.trim() !== '') {
+          db.query('UPDATE Video SET VideoTitle = ? WHERE VideoID = ?', [company, videoId], (titleErr) => {
+            if (titleErr) {
+              console.error(titleErr);
+              return res.status(500).json({ message: 'Internal server error' });
+            }
+            res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
+          });
+        } else {
+          res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
+        }
+      };
 
       // หา VideoID/CompanyID ปัจจุบันของวิดีโอนี้ก่อน เพราะตอนอัปโหลดวิดีโอยังไม่ถูกผูกกับ Company
       // (CompanyID เป็น NULL) การ UPDATE ผ่าน JOIN แบบเดิมจึงไม่ match แถวไหนเลยและข้อมูลไม่ถูกบันทึก
@@ -108,7 +126,7 @@ router.put('/:summaryId', (req, res) => {
                   console.error(linkErr);
                   return res.status(500).json({ message: 'Internal server error' });
                 }
-                res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
+                finishWithVideoTitle(VideoID);
               });
             });
             return;
@@ -120,7 +138,7 @@ router.put('/:summaryId', (req, res) => {
               console.error(companyErr);
               return res.status(500).json({ message: 'Internal server error' });
             }
-            res.json({ message: 'บันทึกข้อมูลเรียบร้อยแล้ว' });
+            finishWithVideoTitle(VideoID);
           });
         }
       );
