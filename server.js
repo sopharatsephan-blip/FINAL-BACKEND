@@ -8,7 +8,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { transcribeAudio } = require('./transcribe');
-const { summarize, extractTitleFromSummary, truncate } = require('./typhoon');
+const { summarize, correctTranscript, extractTitleFromSummary, truncate } = require('./typhoon');
 const dashboardRoutes = require('./dashboard');
 const app = express();
 app.use(cors());
@@ -316,7 +316,7 @@ app.get('/api/videos/top', (req, res) => {
     LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
     LEFT JOIN Audio a ON v.VideoID = a.VideoID
     WHERE v.VisibilityType = 'Public'
-    ORDER BY v.ViewCount DESC
+    ORDER BY v.ViewCount DESC, v.UploadDate DESC
     LIMIT 1
   `;
   db.query(sql, (err, results) => {
@@ -348,6 +348,7 @@ app.get('/api/videos/weekly', (req, res) => {
     LEFT JOIN JobCategory jc ON s.CategoryID = jc.CategoryID
     LEFT JOIN Audio a ON v.VideoID = a.VideoID
     WHERE v.VisibilityType = 'Public'
+      AND v.UploadDate >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
     ORDER BY v.UploadDate DESC
     LIMIT ?
   `;
@@ -527,11 +528,15 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
         return res.status(422).json({ message: 'ไม่สามารถถอดเสียงจากวิดีโอนี้ได้ (ไม่พบคำพูด)' });
       }
 
-      // 3. สรุปด้วย Typhoon LLM
-      console.log(`📝 กำลังสรุปข้อความด้วย Typhoon ...`);
-      const summaryText = await summarize(transcript);
+      // 3. แก้คำผิดจากการถอดเสียงด้วย Typhoon (ชดเชยความแม่นยำที่เสียไปจาก Whisper โมเดลเล็ก)
+      console.log(`🔧 กำลังแก้คำผิดใน transcript ด้วย Typhoon ...`);
+      const correctedTranscript = await correctTranscript(transcript);
 
-      // 3.1 ตั้งชื่อวิดีโอจากหัวข้อที่ 1 (ชื่อหน่วยงาน) + หัวข้อที่ 2 (ตำแหน่งงาน) ของบทสรุป
+      // 4. สรุปด้วย Typhoon LLM
+      console.log(`📝 กำลังสรุปข้อความด้วย Typhoon ...`);
+      const summaryText = await summarize(correctedTranscript);
+
+      // 4.1 ตั้งชื่อวิดีโอจากหัวข้อที่ 1 (ชื่อหน่วยงาน) + หัวข้อที่ 2 (ตำแหน่งงาน) ของบทสรุป
       const generatedTitle = truncate(extractTitleFromSummary(summaryText), 100); // Video.VideoTitle เป็น varchar(100)
       if (generatedTitle) {
         db.query('UPDATE Video SET VideoTitle = ? WHERE VideoID = ?', [generatedTitle, id], (titleErr) => {
@@ -539,7 +544,7 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
         });
       }
 
-      // 4. บันทึก Transcript ก่อน (Summary ต้องผูกกับ TranscriptID)
+      // 5. บันทึก Transcript ก่อน (Summary ต้องผูกกับ TranscriptID)
       const transcriptId = `T${Date.now()}`;
       const createDate = new Date().toISOString().slice(0, 10);
 
@@ -548,13 +553,13 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
         VALUES (?, ?, ?, ?)
       `;
 
-      db.query(sqlTranscript, [transcriptId, id, transcript, createDate], (transErr) => {
+      db.query(sqlTranscript, [transcriptId, id, correctedTranscript, createDate], (transErr) => {
         if (transErr) {
           console.error('Save transcript error:', transErr);
           return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึก Transcript ไม่สำเร็จ' });
         }
 
-        // 5. เช็คว่ามี Summary ของวิดีโอนี้อยู่แล้วหรือยัง (สร้างใหม่ หรืออัปเดต)
+        // 6. เช็คว่ามี Summary ของวิดีโอนี้อยู่แล้วหรือยัง (สร้างใหม่ หรืออัปเดต)
         const sqlCheckSummary = 'SELECT SummaryID FROM Summary WHERE VideoID = ?';
         db.query(sqlCheckSummary, [id], (checkErr, checkResults) => {
           if (checkErr) {
@@ -573,7 +578,7 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
                 console.error('Update summary error:', updErr);
                 return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึกลงฐานข้อมูลไม่สำเร็จ' });
               }
-              res.json({ message: 'สรุปวิดีโอสำเร็จ', videoId: id, transcript, summary: summaryText });
+              res.json({ message: 'สรุปวิดีโอสำเร็จ', videoId: id, transcript: correctedTranscript, summary: summaryText });
             });
           } else {
             // ยังไม่มี -> INSERT ใหม่
@@ -587,7 +592,7 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
                 console.error('Insert summary error:', insErr);
                 return res.status(500).json({ message: 'สรุปสำเร็จแต่บันทึกลงฐานข้อมูลไม่สำเร็จ' });
               }
-              res.json({ message: 'สรุปวิดีโอสำเร็จ', videoId: id, transcript, summary: summaryText });
+              res.json({ message: 'สรุปวิดีโอสำเร็จ', videoId: id, transcript: correctedTranscript, summary: summaryText });
             });
           }
         });
@@ -678,6 +683,12 @@ app.get('/api/videos/:id', (req, res) => {
     if (video.VisibilityType !== 'Public' && !isAdmin) {
       return res.status(404).json({ message: 'ไม่พบวิดีโอนี้ในระบบ' });
     }
+
+    // นับยอดวิว: +1 ทุกครั้งที่มีการเปิดดูวิดีโอนี้จริง (ใช้เป็นตัวจัดอันดับ Popular Video Rank)
+    db.query('UPDATE Video SET ViewCount = ViewCount + 1 WHERE VideoID = ?', [id], (viewErr) => {
+      if (viewErr) console.error('Update view count error:', viewErr);
+    });
+    video.ViewCount += 1;
 
     res.json(video);
   });

@@ -29,6 +29,52 @@ function buildUserPrompt(text) {
   return `นี่คือบทถอดเสียงสัมภาษณ์นักศึกษาเกี่ยวกับการฝึกงาน:\n\n${text}\n\nโปรดสรุปเนื้อหาข้างต้นให้ครบทั้ง ${SUMMARY_TOPICS.length} หัวข้อต่อไปนี้ ตามลำดับ:\n${topicList}`;
 }
 
+const CORRECT_SYSTEM_PROMPT = `คุณเป็นผู้ช่วยแก้คำผิดในบทถอดเสียงภาษาไทยที่ได้จากระบบ Speech-to-Text
+แก้เฉพาะคำที่สะกดผิด/ถอดเสียงผิดพลาดให้ถูกต้องตามบริบท ห้ามเปลี่ยนใจความ ห้ามเพิ่มหรือลดเนื้อหา
+ห้ามสรุปหรือย่อข้อความ ห้ามใส่คำนำหรือคำลงท้าย ตอบกลับเฉพาะข้อความที่แก้ไขแล้วเท่านั้น`;
+
+/**
+ * แก้คำผิดในบท transcript ที่ได้จาก Whisper ด้วย Typhoon LLM ก่อนนำไปสรุป
+ * ใช้ชดเชยความแม่นยำที่ลดลงจากการใช้ Whisper โมเดลเล็กเพื่อความเร็ว
+ * @param {string} text - transcript ดิบจาก Whisper
+ * @returns {Promise<string>} transcript ที่แก้คำผิดแล้ว
+ */
+async function correctTranscript(text) {
+  if (!text || !text.trim()) return text;
+
+  const apiKey = process.env.TYPHOON_API_KEY;
+  if (!apiKey) {
+    throw new Error('ไม่พบ TYPHOON_API_KEY กรุณาตั้งค่าใน .env');
+  }
+
+  const response = await fetch(TYPHOON_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: TYPHOON_MODEL,
+      messages: [
+        { role: 'system', content: CORRECT_SYSTEM_PROMPT },
+        { role: 'user', content: text },
+      ],
+      max_tokens: 4096,
+      temperature: 0.1,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Typhoon API error (${response.status}): ${errText || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const corrected = data?.choices?.[0]?.message?.content?.trim();
+
+  return corrected || text;
+}
+
 /**
  * สรุป transcript ด้วย Typhoon LLM ตามหัวข้อรายงานฝึกงานที่กำหนดไว้ตายตัว
  * @param {string} text - transcript เต็ม
@@ -125,4 +171,4 @@ function truncate(str, maxLen) {
   return `${str.slice(0, maxLen - 1).trimEnd()}…`;
 }
 
-module.exports = { summarize, extractTitleFromSummary, truncate };
+module.exports = { summarize, correctTranscript, extractTitleFromSummary, truncate };

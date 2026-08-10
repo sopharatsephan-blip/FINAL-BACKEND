@@ -10,8 +10,8 @@ router.get('/popular-video', (req, res) => {
     LEFT JOIN Company c ON v.CompanyID = c.CompanyID
     LEFT JOIN Summary s ON v.VideoID = s.VideoID
     LEFT JOIN Audio a ON v.VideoID = a.VideoID
-    WHERE v.VisibilityType = 'Public' AND v.VideoStatusID = 'VS002'
-    ORDER BY v.ViewCount DESC
+    WHERE v.VisibilityType = 'Public'
+    ORDER BY v.ViewCount DESC, v.UploadDate DESC
     LIMIT 1
   `;
   db.query(sql, (err, results) => {
@@ -27,7 +27,8 @@ router.get('/weekly-summaries', (req, res) => {
     FROM Video v
     LEFT JOIN Summary s ON v.VideoID = s.VideoID
     LEFT JOIN Audio a ON v.VideoID = a.VideoID
-    WHERE v.VisibilityType = 'Public' AND v.VideoStatusID = 'VS002'
+    WHERE v.VisibilityType = 'Public'
+      AND v.UploadDate >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
     ORDER BY v.UploadDate DESC
     LIMIT 3
   `;
