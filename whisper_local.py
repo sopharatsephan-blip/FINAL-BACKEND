@@ -39,25 +39,25 @@ DEVICE = os.environ.get("WHISPER_DEVICE", "cuda" if CUDA_DEVICE_COUNT else "cpu"
 if DEVICE == "cuda" and CUDA_DEVICE_COUNT == 0:
     print("[whisper] CUDA requested but unavailable; falling back to CPU", file=sys.stderr)
     DEVICE = "cpu"
-BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "3"))
+BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "5" if DEVICE == "cpu" else "3"))
 COMPUTE_TYPE = os.environ.get(
     "WHISPER_COMPUTE_TYPE",
-    "float16" if DEVICE == "cuda" else "int8",
+    "float16" if DEVICE == "cuda" else "int8_float32",
 )
 if DEVICE == "cpu" and COMPUTE_TYPE == "float16":
-    print("[whisper] float16 is not supported for CPU; using int8", file=sys.stderr)
-    COMPUTE_TYPE = "int8"
+    print("[whisper] float16 is not supported for CPU; using int8_float32", file=sys.stderr)
+    COMPUTE_TYPE = "int8_float32"
 
 TRANSCRIBE_ARGS = dict(
     language="th",
     vad_filter=True,
-    condition_on_previous_text=True,
+    condition_on_previous_text=DEVICE != "cpu",
     beam_size=BEAM_SIZE,
+    repetition_penalty=1.1 if DEVICE == "cpu" else 1.0,
+    no_repeat_ngram_size=3 if DEVICE == "cpu" else 0,
     initial_prompt=(
-        "บทสัมภาษณ์นักศึกษาฝึกงาน ชื่อหน่วยงาน อุทยานวิทยาศาสตร์ ภูมิภาค ภาคใต้ "
-        "ตำแหน่งงาน โปรเจกต์ UX UI DESIGN "
-        "การออกแบบเว็บไซต์ การออกแบบแอปพลิเคชัน ซอฟต์แวร์ เทคโนโลยี "
-        "ชื่อบุคคล ชื่อสถานที่ ชื่อบริษัท สถาบันการศึกษา ภาครัฐ ภาคเอกชน"
+        "นักศึกษาฝึกงาน อุทยานวิทยาศาสตร์ วิทยาศาสตร์ เทคโนโลยี นวัตกรรม "
+        "UX UI DESIGN CONTENT CREATOR แอปพลิเคชัน ซอฟต์แวร์"
     ),
 )
 
@@ -75,7 +75,10 @@ segments = list(raw_segments)
 elapsed = time.time() - start
 print(
     f"[whisper] ถอดเสียงสำเร็จด้วย device={DEVICE} compute={COMPUTE_TYPE} "
-    f"model={MODEL_SIZE} ใช้เวลา {elapsed:.1f}s",
+    f"model={MODEL_SIZE} beam={BEAM_SIZE} "
+    f"condition_on_previous_text={TRANSCRIBE_ARGS['condition_on_previous_text']} "
+    f"no_repeat_ngram_size={TRANSCRIBE_ARGS['no_repeat_ngram_size']} "
+    f"ใช้เวลา {elapsed:.1f}s",
     file=sys.stderr,
 )
 
