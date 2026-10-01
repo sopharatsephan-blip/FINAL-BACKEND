@@ -1,7 +1,51 @@
 const express = require('express');
 const router = express.Router();
 const db = require('./db'); // ✅ ใช้ pool กลางจาก db.js แทนการสร้าง connection เอง
-const { extractTitleFromSummary, truncate } = require('./typhoon');
+const { extractTitleFromSummary, suggestSummaryFields, truncate } = require('./typhoon');
+
+router.post('/:summaryId/suggestions', async (req, res) => {
+  try {
+    const { summaryId } = req.params;
+    const [summaryRows] = await db.promise().query(
+      `SELECT s.SummaryText, t.TranscriptText
+       FROM Summary s
+       LEFT JOIN Transcript t ON s.TranscriptID = t.TranscriptID
+       WHERE s.SummaryID = ?`,
+      [summaryId]
+    );
+    if (summaryRows.length === 0) {
+      return res.status(404).json({ message: 'ไม่พบข้อมูลสรุปนี้' });
+    }
+
+    const [provinceRows] = await db.promise().query(
+      'SELECT ProvinceNameEN AS value, ProvinceNameTH AS label FROM Province ORDER BY ProvinceNameEN'
+    );
+    const [workTypeRows] = await db.promise().query(
+      'SELECT WorkTypeName FROM WorkType ORDER BY WorkTypeID'
+    );
+    const [positionRows] = await db.promise().query(
+      'SELECT PositionName FROM `Position` ORDER BY PositionName'
+    );
+    const [businessTypeRows] = await db.promise().query(
+      'SELECT BusinessTypeName FROM BusinessType ORDER BY BusinessTypeName'
+    );
+
+    const suggestions = await suggestSummaryFields(
+      summaryRows[0].SummaryText,
+      summaryRows[0].TranscriptText,
+      {
+        locations: provinceRows,
+        workTypes: workTypeRows.map((row) => row.WorkTypeName),
+        positions: positionRows.map((row) => row.PositionName),
+        businessTypes: businessTypeRows.map((row) => row.BusinessTypeName),
+      }
+    );
+    return res.json({ suggestions });
+  } catch (err) {
+    console.error('Summary field suggestion error:', err);
+    return res.status(500).json({ message: 'ไม่สามารถแนะนำข้อมูลได้ในขณะนี้' });
+  }
+});
 
 // GET /api/summaries/video/:videoId - ดึงข้อมูลสรุปตาม VideoID
 router.get('/video/:videoId', (req, res) => {

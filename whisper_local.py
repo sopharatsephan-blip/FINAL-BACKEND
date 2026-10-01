@@ -1,35 +1,71 @@
 import os
+import site
 import sys
 import time
+
+# NVIDIA's pip packages keep CUDA DLLs in separate folders that Windows does
+# not search automatically when CTranslate2 loads its GPU backend.
+if os.name == "nt":
+    dll_directories = []
+    for site_directory in site.getsitepackages():
+        dll_directories.extend(
+            os.path.join(site_directory, relative_directory)
+            for relative_directory in (
+                "nvidia\\cublas\\bin",
+                "nvidia\\cudnn\\bin",
+                "nvidia\\cuda_nvrtc\\bin",
+                "nvidia\\cuda_runtime\\bin",
+            )
+        )
+
+    for dll_directory in dll_directories:
+        if os.path.isdir(dll_directory):
+            os.add_dll_directory(dll_directory)
+            os.environ["PATH"] = dll_directory + os.pathsep + os.environ.get("PATH", "")
 
 from faster_whisper import WhisperModel
 
 video_path = sys.argv[1]
 
-# เครื่องนี้ไม่มีการ์ดจอ ใช้ GPU ไม่ได้ -> ถอดเสียงด้วย CPU เท่านั้น
-# ใช้โมเดล small (เร็วกว่า medium มาก) เพื่อความเร็วบน CPU เป็นหลัก
-# ความแม่นยำที่เสียไปให้ Typhoon ช่วยแก้คำผิดในขั้นตอนถัดไป (ดู typhoon.js: correctTranscript)
-# cpu_threads ระบุเต็มจำนวนคอร์เพื่อให้ ctranslate2 ใช้ทุก core ช่วยกันถอด
-MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")
+
+MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large-v3-turbo")
+DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
+BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "3"))
+COMPUTE_TYPE = os.environ.get(
+    "WHISPER_COMPUTE_TYPE",
+    "float16" if DEVICE == "cuda" else "int8",
+)
 
 TRANSCRIBE_ARGS = dict(
-    language="th",  # ระบุภาษาไทยตายตัว กัน auto-detect หลุดภาษากลางคลิป
-    vad_filter=True,  # ตัดช่วงเงียบ/noise ทิ้ง ลด hallucination
-    condition_on_previous_text=False,  # กันข้อความวนซ้ำ/ลากยาวผิดจากบริบทก่อนหน้า
-    beam_size=1,  # greedy decoding แทน beam search เพื่อความเร็ว (แลกความแม่นยำเล็กน้อย)
+    language="th",
+    vad_filter=True,
+    condition_on_previous_text=True,
+    beam_size=BEAM_SIZE,
+    initial_prompt=(
+        "บทสัมภาษณ์นักศึกษาฝึกงาน ชื่อหน่วยงาน อุทยานวิทยาศาสตร์ ภูมิภาค ภาคใต้ "
+        "ตำแหน่งงาน โปรเจกต์ UX UI DESIGN "
+        "การออกแบบเว็บไซต์ การออกแบบแอปพลิเคชัน ซอฟต์แวร์ เทคโนโลยี "
+        "ชื่อบุคคล ชื่อสถานที่ ชื่อบริษัท สถาบันการศึกษา ภาครัฐ ภาคเอกชน"
+    ),
 )
 
 start = time.time()
-model = WhisperModel(
-    MODEL_SIZE,
-    device="cpu",
-    compute_type="int8",
-    cpu_threads=os.cpu_count() or 4,
-)
+model_options = {
+    "device": DEVICE,
+    "compute_type": COMPUTE_TYPE,
+}
+if DEVICE == "cpu":
+    model_options["cpu_threads"] = os.cpu_count() or 4
+
+model = WhisperModel(MODEL_SIZE, **model_options)
 raw_segments, info = model.transcribe(video_path, **TRANSCRIBE_ARGS)
 segments = list(raw_segments)
 elapsed = time.time() - start
-print(f"[whisper] ถอดเสียงสำเร็จด้วย CPU model={MODEL_SIZE} ใช้เวลา {elapsed:.1f}s", file=sys.stderr)
+print(
+    f"[whisper] ถอดเสียงสำเร็จด้วย device={DEVICE} compute={COMPUTE_TYPE} "
+    f"model={MODEL_SIZE} ใช้เวลา {elapsed:.1f}s",
+    file=sys.stderr,
+)
 
 text = " ".join([seg.text for seg in segments]).strip()
 

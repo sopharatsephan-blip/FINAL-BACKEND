@@ -471,7 +471,7 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
 
   const videoId = `V${Date.now()}`;
   const videoPath = `uploads/videos/${req.file.filename}`;
-  const title = videoTitle || req.file.originalname.replace(/\.[^/.]+$/, '');
+  const title = truncate(videoTitle || req.file.originalname.replace(/\.[^/.]+$/, ''), 100);
   const uploadDate = new Date().toISOString().slice(0, 10);
   const visibility = visibilityType || 'Private';
 
@@ -486,7 +486,7 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
       console.error(err);
       return res.status(500).json({ message: 'เกิดข้อผิดพลาดในการบันทึกวิดีโอ' });
     }
-
+  
     // 2. ถ้ามีการระบุ Position ให้บันทึกลงตาราง Summary ด้วย
     if (position) {
       const summaryId = `S${Date.now()}`;
@@ -522,15 +522,30 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
     try {
       // 2. แยกเสียง + ถอดเป็นข้อความ (Whisper local)
       console.log(`🎙️ กำลังถอดเสียงวิดีโอ ${id} ...`);
+      const transcriptionStartedAt = Date.now();
       const transcript = await transcribeAudio(videoPath);
+      const transcriptionElapsed = ((Date.now() - transcriptionStartedAt) / 1000).toFixed(1);
 
       if (!transcript || transcript.trim().length === 0) {
         return res.status(422).json({ message: 'ไม่สามารถถอดเสียงจากวิดีโอนี้ได้ (ไม่พบคำพูด)' });
       }
 
+      console.log(`[TRANSCRIPT-COMPARE][STT] video=${id} elapsed=${transcriptionElapsed}s chars=${transcript.length}`);
+      console.log('[TRANSCRIPT-COMPARE][STT] ----- RAW TRANSCRIPT BEGIN -----');
+      console.log(transcript);
+      console.log('[TRANSCRIPT-COMPARE][STT] ----- RAW TRANSCRIPT END -----');
+
       // 3. แก้คำผิดจากการถอดเสียงด้วย Typhoon (ชดเชยความแม่นยำที่เสียไปจาก Whisper โมเดลเล็ก)
       console.log(`🔧 กำลังแก้คำผิดใน transcript ด้วย Typhoon ...`);
+      const correctionStartedAt = Date.now();
       const correctedTranscript = await correctTranscript(transcript);
+      const correctionElapsed = ((Date.now() - correctionStartedAt) / 1000).toFixed(1);
+      const transcriptChanged = correctedTranscript !== transcript;
+
+      console.log(`[TRANSCRIPT-COMPARE][TYPHOON] video=${id} elapsed=${correctionElapsed}s chars=${correctedTranscript.length} changed=${transcriptChanged}`);
+      console.log('[TRANSCRIPT-COMPARE][TYPHOON] ----- CORRECTED TRANSCRIPT BEGIN -----');
+      console.log(correctedTranscript);
+      console.log('[TRANSCRIPT-COMPARE][TYPHOON] ----- CORRECTED TRANSCRIPT END -----');
 
       // 4. สรุปด้วย Typhoon LLM
       console.log(`📝 กำลังสรุปข้อความด้วย Typhoon ...`);
