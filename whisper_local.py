@@ -23,13 +23,19 @@ if os.name == "nt":
             os.add_dll_directory(dll_directory)
             os.environ["PATH"] = dll_directory + os.pathsep + os.environ.get("PATH", "")
 
+import ctranslate2
 from faster_whisper import WhisperModel
 
 video_path = sys.argv[1]
 
 
 MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "large-v3-turbo")
-DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
+try:
+    CUDA_DEVICE_COUNT = ctranslate2.get_cuda_device_count()
+except (AttributeError, RuntimeError):
+    CUDA_DEVICE_COUNT = 0
+
+DEVICE = os.environ.get("WHISPER_DEVICE", "cuda" if CUDA_DEVICE_COUNT else "cpu")
 BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "3"))
 COMPUTE_TYPE = os.environ.get(
     "WHISPER_COMPUTE_TYPE",
