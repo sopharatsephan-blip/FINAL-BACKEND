@@ -36,11 +36,17 @@ except (AttributeError, RuntimeError):
     CUDA_DEVICE_COUNT = 0
 
 DEVICE = os.environ.get("WHISPER_DEVICE", "cuda" if CUDA_DEVICE_COUNT else "cpu")
+if DEVICE == "cuda" and CUDA_DEVICE_COUNT == 0:
+    print("[whisper] CUDA requested but unavailable; falling back to CPU", file=sys.stderr)
+    DEVICE = "cpu"
 BEAM_SIZE = int(os.environ.get("WHISPER_BEAM_SIZE", "3"))
 COMPUTE_TYPE = os.environ.get(
     "WHISPER_COMPUTE_TYPE",
     "float16" if DEVICE == "cuda" else "int8",
 )
+if DEVICE == "cpu" and COMPUTE_TYPE == "float16":
+    print("[whisper] float16 is not supported for CPU; using int8", file=sys.stderr)
+    COMPUTE_TYPE = "int8"
 
 TRANSCRIBE_ARGS = dict(
     language="th",
