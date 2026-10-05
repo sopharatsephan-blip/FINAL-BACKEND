@@ -6,8 +6,19 @@
 const TYPHOON_API_URL = 'https://api.opentyphoon.ai/v1/chat/completions';
 const TYPHOON_MODEL = process.env.TYPHOON_MODEL || 'typhoon-v2.5-30b-a3b-instruct';
 
-// หัวข้อบังคับของบทสรุปฝึกงาน เรียงตามลำดับที่ต้องปรากฏในผลลัพธ์เสมอ
+// คำถามบังคับของบทสรุปฝึกงาน เรียงตามลำดับที่ต้องปรากฏในผลลัพธ์เสมอ
 const SUMMARY_TOPICS = [
+  'ชื่อหน่วยงานและสถานประกอบการที่นักศึกษาไปฝึกงานคืออะไร?',
+  'นักศึกษาฝึกงานในตำแหน่งใด และลักษณะงานที่ทำเป็นอย่างไร?',
+  'โครงการหรืองานที่นักศึกษาทำระหว่างฝึกงานคืออะไร?',
+  'นักศึกษาพบปัญหาอะไร และมีวิธีแก้ไขอย่างไร (ถ้ามี)?',
+  'นักศึกษาได้เรียนรู้อะไรจากการฝึกงานครั้งนี้?',
+  'จากประสบการณ์ฝึกงาน นักศึกษาคิดจะเปลี่ยนแนวอาชีพในอนาคตหรือไม่ เพราะอะไร?',
+  'หน่วยงานที่ไปฝึกงานควรแนะนำให้รุ่นน้องไปฝึกงานหรือไม่ เพราะอะไร?',
+  'มีข้อเสนอแนะอะไรสำหรับรุ่นน้องที่จะไปฝึกงานรุ่นต่อไป?',
+];
+
+const LEGACY_SUMMARY_TOPICS = [
   'ชื่อหน่วยงานและสถานประกอบการ',
   'ตำแหน่งและลักษณะงานที่ทำ',
   'Project หรืองานที่ทำระหว่างฝึกงาน',
@@ -19,16 +30,56 @@ const SUMMARY_TOPICS = [
 ];
 
 const SUMMARY_SYSTEM_PROMPT = `คุณเป็นผู้ช่วยสรุปบทสัมภาษณ์นักศึกษาฝึกงานเป็นภาษาไทย
-สรุปเนื้อหาที่ได้รับตามหัวข้อที่กำหนดไว้ทั้ง ${SUMMARY_TOPICS.length} หัวข้อ ตามลำดับ ห้ามสลับลำดับ ห้ามเพิ่มหรือลดหัวข้อ
-รูปแบบผลลัพธ์: แต่ละหัวข้อขึ้นต้นด้วย "หมายเลข. ชื่อหัวข้อ" บรรทัดถัดไปตอบเป็นวลีหรือคำตอบสั้นๆ เพียง 1 บรรทัด ไม่เกิน 8 คำ ไม่ต้องอธิบายเหตุผลหรือขยายความ
+สรุปเนื้อหาที่ได้รับให้ครบทั้ง ${SUMMARY_TOPICS.length} คำถาม ตามลำดับ ห้ามสลับลำดับ ห้ามเพิ่มหรือลดคำถาม
+รูปแบบผลลัพธ์: แต่ละข้อขึ้นต้นด้วย "หมายเลข. คำถามเต็มตามที่กำหนด" โดยต้องคัดลอกข้อความคำถามให้ตรงทุกคำและเครื่องหมายวรรคตอน บรรทัดถัดไปเขียนคำตอบเป็นวลีสั้นๆ เพียง 1 บรรทัด ไม่เกิน 8 คำ ไม่ต้องอธิบายเหตุผลหรือขยายความ
 ข้อ 1 ให้ตอบเฉพาะชื่อหน่วยงาน/สถานประกอบการเท่านั้น เช่น "อุทยานวิทยาศาสตร์ภูมิภาคภาคใต้" ห้ามเติมคำอธิบายประเภทหน่วยงานหรือหน้าที่
 ข้อ 2 ให้ตอบเฉพาะชื่อตำแหน่งหรืองาน เช่น "UX UI DESIGN" ห้ามเติมรายละเอียดลักษณะงาน
-เว้นบรรทัดว่างคั่นระหว่างแต่ละหัวข้อ ห้ามใช้สัญลักษณ์ markdown เช่น # หรือ ** ห้ามมีคำนำหรือคำลงท้ายอื่นใดนอกเหนือจาก ${SUMMARY_TOPICS.length} หัวข้อนี้
+เว้นบรรทัดว่างคั่นระหว่างแต่ละข้อ ห้ามใช้สัญลักษณ์ markdown เช่น # หรือ ** ห้ามมีคำนำหรือคำลงท้ายอื่นใดนอกเหนือจาก ${SUMMARY_TOPICS.length} คำถามและคำตอบ
 ถ้าเนื้อหาต้นฉบับไม่มีข้อมูลเพียงพอสำหรับหัวข้อใด ให้เขียนว่า "ไม่มีข้อมูลในบทสัมภาษณ์" สำหรับหัวข้อนั้น`;
 
 function buildUserPrompt(text) {
-  const topicList = SUMMARY_TOPICS.map((topic, idx) => `${idx + 1}. ${topic}`).join('\n');
-  return `นี่คือบทถอดเสียงสัมภาษณ์นักศึกษาเกี่ยวกับการฝึกงาน:\n\n${text}\n\nโปรดสรุปเนื้อหาข้างต้นให้ครบทั้ง ${SUMMARY_TOPICS.length} หัวข้อต่อไปนี้ ตามลำดับ:\n${topicList}`;
+  const questionList = SUMMARY_TOPICS.map((question, idx) => `${idx + 1}. ${question}`).join('\n');
+  return `นี่คือบทถอดเสียงสัมภาษณ์นักศึกษาเกี่ยวกับการฝึกงาน:\n\n${text}\n\nโปรดทวนคำถามและสรุปคำตอบให้ครบทั้ง ${SUMMARY_TOPICS.length} ข้อต่อไปนี้ โดยคัดลอกคำถามตามข้อความนี้ทุกคำ:\n${questionList}`;
+}
+
+function normalizeSummaryQuestions(summaryText) {
+  if (!summaryText || typeof summaryText !== 'string') return '';
+
+  const answers = Array.from({ length: SUMMARY_TOPICS.length }, () => []);
+  let currentTopicIndex = -1;
+  let foundNumberedTopic = false;
+
+  for (const line of summaryText.split(/\r?\n/)) {
+    const numberedTopic = line.match(/^\s*(?:[-*]\s*)?([1-8])[.)、]\s*(.*)$/);
+    if (numberedTopic) {
+      currentTopicIndex = Number(numberedTopic[1]) - 1;
+      foundNumberedTopic = true;
+
+      let answer = numberedTopic[2].trim();
+      const headings = [
+        SUMMARY_TOPICS[currentTopicIndex],
+        LEGACY_SUMMARY_TOPICS[currentTopicIndex],
+      ];
+      const heading = headings.find((candidate) => answer.startsWith(candidate));
+      if (heading) {
+        answer = answer.slice(heading.length).replace(/^[\s:：\-–—]+/, '').trim();
+      }
+      answer = answer.replace(/^\d+[.)、]\s*/, '').trim();
+      if (answer) answers[currentTopicIndex].push(answer);
+      continue;
+    }
+
+    if (currentTopicIndex >= 0 && line.trim()) {
+      answers[currentTopicIndex].push(line.trim());
+    }
+  }
+
+  if (!foundNumberedTopic) return summaryText.trim();
+
+  return SUMMARY_TOPICS.map((question, index) => {
+    const answer = answers[index].join(' ').trim() || 'ไม่มีข้อมูลในบทสัมภาษณ์';
+    return `${index + 1}. ${question}\n${answer}`;
+  }).join('\n\n');
 }
 
 const CORRECT_SYSTEM_PROMPT = `คุณเป็นผู้ตรวจทานบทถอดเสียงภาษาไทยจากระบบ Speech-to-Text
@@ -129,7 +180,7 @@ async function summarize(text) {
     throw new Error('Typhoon API ไม่คืนข้อความสรุปกลับมา');
   }
 
-  return summaryText;
+  return normalizeSummaryQuestions(summaryText);
 }
 
 async function suggestSummaryFields(summaryText, transcript, options) {
@@ -195,35 +246,38 @@ async function suggestSummaryFields(summaryText, transcript, options) {
 }
 
 /**
- * ดึงเนื้อหาของหัวข้อที่ 1 (ชื่อหน่วยงานและสถานประกอบการ) และหัวข้อที่ 2
- * (ตำแหน่งและลักษณะงานที่ทำ) จากข้อความสรุป แล้วต่อกันไว้ใช้เป็นชื่อวิดีโอ
- * @param {string} summaryText - ข้อความสรุปที่ได้จาก summarize()
- * @returns {string} ชื่อวิดีโอที่ประกอบจากหัวข้อที่ 1 และ 2 (ว่างถ้าหาหัวข้อไม่เจอ)
+ * Build the summary name from answers to topics 1 and 2, excluding their question headings.
+ * @param {string} summaryText - Summary text containing numbered questions and answers.
+ * @returns {string} Name composed from the organization and position answers.
  */
 function extractTitleFromSummary(summaryText) {
   if (!summaryText) return '';
 
-  const getTopicContent = (topicIndex) => {
-    const topic = SUMMARY_TOPICS[topicIndex];
-    const nextTopic = SUMMARY_TOPICS[topicIndex + 1];
+  const answers = Array.from({ length: 2 }, () => []);
+  let currentTopicIndex = -1;
 
-    const start = summaryText.indexOf(topic);
-    if (start === -1) return '';
+  for (const line of summaryText.split(/\r?\n/)) {
+    const numberedTopic = line.match(/^\s*(?:[-*]\s*)?([1-8])[.)、]\s*(.*)$/);
+    if (numberedTopic) {
+      currentTopicIndex = Number(numberedTopic[1]) - 1;
+      if (currentTopicIndex > 1) continue;
 
-    const contentStart = start + topic.length;
-    const end = nextTopic ? summaryText.indexOf(nextTopic, contentStart) : -1;
-    const raw = end === -1 ? summaryText.slice(contentStart) : summaryText.slice(contentStart, end);
+      let answer = numberedTopic[2].trim();
+      const heading = [
+        SUMMARY_TOPICS[currentTopicIndex],
+        LEGACY_SUMMARY_TOPICS[currentTopicIndex],
+      ].find((candidate) => answer.startsWith(candidate));
+      if (heading) answer = answer.slice(heading.length).replace(/^[\s:：\-–—]+/, '').trim();
+      if (answer) answers[currentTopicIndex].push(answer);
+      continue;
+    }
 
-    return raw
-      .replace(/\d+\.\s*$/, '') // ตัดเลขหัวข้อถัดไปที่ติดมาท้ายข้อความ (เช่น "2. ")
-      .replace(/\s+/g, ' ')
-      .trim();
-  };
+    if (currentTopicIndex >= 0 && currentTopicIndex < 2 && line.trim()) {
+      answers[currentTopicIndex].push(line.trim());
+    }
+  }
 
-  const orgName = getTopicContent(0);
-  const position = getTopicContent(1);
-
-  return [orgName, position].filter(Boolean).join(' - ');
+  return answers.map((topicAnswers) => topicAnswers.join(' ').trim()).filter(Boolean).join(' - ');
 }
 
 /**
@@ -239,4 +293,11 @@ function truncate(str, maxLen) {
   return `${str.slice(0, maxLen - 1).trimEnd()}…`;
 }
 
-module.exports = { summarize, correctTranscript, suggestSummaryFields, extractTitleFromSummary, truncate };
+module.exports = {
+  summarize,
+  correctTranscript,
+  suggestSummaryFields,
+  extractTitleFromSummary,
+  normalizeSummaryQuestions,
+  truncate,
+};

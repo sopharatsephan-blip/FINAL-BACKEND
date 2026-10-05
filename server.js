@@ -8,7 +8,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { transcribeAudio } = require('./transcribe');
-const { summarize, correctTranscript, extractTitleFromSummary, truncate } = require('./typhoon');
+const { summarize, correctTranscript, normalizeSummaryQuestions, truncate } = require('./typhoon');
 const dashboardRoutes = require('./dashboard');
 const app = express();
 app.use(cors());
@@ -433,11 +433,13 @@ app.get('/api/videos/search', (req, res) => {
     sql += ' AND c.Location = ?';
     params.push(location);
   }
-  if (workType) {
+  if (workType !== undefined) {
     const types = workType.split(',').filter(Boolean);
     if (types.length > 0) {
       sql += ` AND c.WorkType IN (${types.map(() => '?').join(',')})`;
       params.push(...types);
+    } else {
+      sql += ' AND 1 = 0';
     }
   }
   if (position) {
@@ -471,7 +473,7 @@ app.post('/api/videos/upload', upload.single('videoFile'), (req, res) => {
 
   const videoId = `V${Date.now()}`;
   const videoPath = `uploads/videos/${req.file.filename}`;
-  const title = truncate(videoTitle || req.file.originalname.replace(/\.[^/.]+$/, ''), 100);
+  const title = truncate(videoTitle || 'N/A', 100);
   const uploadDate = new Date().toISOString().slice(0, 10);
   const visibility = visibilityType || 'Private';
 
@@ -550,14 +552,6 @@ app.post('/api/videos/:id/summarize', async (req, res) => {
       // 4. สรุปด้วย Typhoon LLM
       console.log(`📝 กำลังสรุปข้อความด้วย Typhoon ...`);
       const summaryText = await summarize(correctedTranscript);
-
-      // 4.1 ตั้งชื่อวิดีโอจากหัวข้อที่ 1 (ชื่อหน่วยงาน) + หัวข้อที่ 2 (ตำแหน่งงาน) ของบทสรุป
-      const generatedTitle = truncate(extractTitleFromSummary(summaryText), 100); // Video.VideoTitle เป็น varchar(100)
-      if (generatedTitle) {
-        db.query('UPDATE Video SET VideoTitle = ? WHERE VideoID = ?', [generatedTitle, id], (titleErr) => {
-          if (titleErr) console.error('Update video title error:', titleErr);
-        });
-      }
 
       // 5. บันทึก Transcript ก่อน (Summary ต้องผูกกับ TranscriptID)
       const transcriptId = `T${Date.now()}`;
@@ -653,7 +647,7 @@ app.get('/api/videos/:id/summary', (req, res) => {
 
     res.json({
       SummaryID: row.SummaryID,
-      SummaryText: row.SummaryText,
+      SummaryText: normalizeSummaryQuestions(row.SummaryText || ''),
       Position: row.Position,
       Transcript: row.Transcript,
     });
@@ -694,6 +688,7 @@ app.get('/api/videos/:id', (req, res) => {
     }
 
     const video = results[0];
+    video.SummaryText = normalizeSummaryQuestions(video.SummaryText || '');
     // วิดีโอที่เป็น Private ให้เห็นเฉพาะ Admin เท่านั้น ส่วน role อื่น (เช่น Student) ตอบเหมือนไม่พบวิดีโอ
     if (video.VisibilityType !== 'Public' && !isAdmin) {
       return res.status(404).json({ message: 'ไม่พบวิดีโอนี้ในระบบ' });

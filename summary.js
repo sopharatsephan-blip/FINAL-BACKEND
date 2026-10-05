@@ -1,7 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const db = require('./db'); // ✅ ใช้ pool กลางจาก db.js แทนการสร้าง connection เอง
-const { extractTitleFromSummary, suggestSummaryFields, truncate } = require('./typhoon');
+const {
+  extractTitleFromSummary,
+  normalizeSummaryQuestions,
+  suggestSummaryFields,
+  truncate,
+} = require('./typhoon');
 
 router.post('/:summaryId/suggestions', async (req, res) => {
   try {
@@ -79,13 +84,13 @@ router.get('/video/:videoId', (req, res) => {
     res.json({
       summaryId: row.SummaryID,   // เก็บไว้ใช้ตอน PUT
       videoId: row.VideoID,
-      company: row.CompanyName || generatedName || row.VideoTitle || '',
+      company: generatedName || row.CompanyName || row.VideoTitle || '',
       category: row.CategoryName || '',
       province: row.Province || '',
       workStyle: row.WorkType || '',
       position: row.SummaryPosition || '',
       businessType: row.BusinessType || '',
-      summaryContent: row.SummaryText || '',
+      summaryContent: normalizeSummaryQuestions(row.SummaryText || ''),
     });
   });
 });
@@ -93,7 +98,7 @@ router.get('/video/:videoId', (req, res) => {
 // PUT /api/summaries/:summaryId - บันทึกการแก้ไข (รองรับการส่งมาแค่บางฟิลด์ เช่น ตอนกด Share ที่ส่งแค่ position)
 router.put('/:summaryId', (req, res) => {
   const { summaryId } = req.params;
-  const { company, category, workStyle, province, position, businessType, summaryContent } = req.body;
+  const { company, category, workStyle, province, position, businessType, summaryContent, isSharing } = req.body;
 
   const findCategoryId = (callback) => {
     if (category === undefined) return callback(null, undefined);
@@ -131,7 +136,7 @@ router.put('/:summaryId', (req, res) => {
 
       // ชื่อ Company ที่กรอกจะถูกใช้เป็นชื่อวิดีโอ (VideoTitle) ด้วย
       const finishWithVideoTitle = (videoId) => {
-        if (company !== undefined && company.trim() !== '') {
+        if (isSharing && company !== undefined && company.trim() !== '') {
           db.query('UPDATE Video SET VideoTitle = ? WHERE VideoID = ?', [truncate(company, 100), videoId], (titleErr) => { // Video.VideoTitle varchar(100)
             if (titleErr) {
               console.error(titleErr);
