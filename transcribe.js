@@ -18,10 +18,12 @@ function transcribeAudio(audioPath) {
     pythonProcess.stdout.on('data', (data) => { output += data; });
     pythonProcess.stderr.on('data', (data) => { errorOutput += data; });
 
-    pythonProcess.on('close', (code) => {
+    pythonProcess.on('close', (code, signal) => {
       if (code !== 0) {
-        console.error('Whisper local stderr:', errorOutput);
-        reject(new Error('ถอดเสียงด้วย Whisper local ล้มเหลว: ' + errorOutput));
+        const diagnostics = errorOutput.trim() ||
+          `Python จบการทำงานโดยไม่มี stderr (exit code: ${code ?? 'unknown'}, signal: ${signal ?? 'none'})`;
+        console.error('Whisper local failed:', diagnostics);
+        reject(new Error(`ถอดเสียงด้วย Whisper local ล้มเหลว: ${diagnostics}`));
         return;
       }
       resolve(output.trim());
